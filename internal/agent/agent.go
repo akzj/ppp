@@ -281,13 +281,15 @@ func (a *Agent) watchJobsLoop(ctx context.Context) {
 				continue
 			}
 			if job.GetState() == pppv1.Job_CREATED || job.GetState() == pppv1.Job_DISTRIBUTING {
+				// The job drives the download until the file completes, at
+				// which point the downloader releases this need itself.
 				a.dm.Ensure(FileNeed{
 					TreeID:   job.GetTreeId(),
 					Filename: job.GetFilename(),
 					Size:     job.GetSize(),
 					JobID:    job.GetId(),
 					Source:   job.GetSource(),
-				})
+				}).markJobNeed()
 			}
 		}
 	}
@@ -435,7 +437,15 @@ func (a *Agent) leaseScanLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			a.leases.Expire(time.Now())
+			now := time.Now()
+			for _, k := range a.leases.Expire(now) {
+				// An expired child lease releases its downloader need; when the
+				// last one goes, the downloader stops and the stop propagates
+				// toward the source via natural upstream lease expiry.
+				if d := a.dm.Get(k.treeID, k.filename); d != nil {
+					d.releaseNeed()
+				}
+			}
 		}
 	}
 }

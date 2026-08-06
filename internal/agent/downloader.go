@@ -89,6 +89,7 @@ type Downloader struct {
 	peers       *peerPool
 	nodeID      string
 	concurrency int
+	mgr         *DownloaderManager
 
 	mu        sync.Mutex
 	ctx       context.Context
@@ -100,15 +101,21 @@ type Downloader struct {
 	waiters   map[int64][]*pieceWaiter
 	fileErr   error
 	complete  bool
-	started   bool
+	running   bool
 	wakeCh    chan struct{}
+	// need counts active holders of this file (child subscribers + active
+	// piece waiters); jobNeed marks a root job-driven download. When need
+	// reaches zero and the file is not complete the downloader stops and is
+	// reclaimed, so upstream leases expire and the stop propagates.
+	need    int
+	jobNeed bool
 }
 
 type pieceWaiter struct {
 	ch chan error // buffered: nil on piece arrival, else file error
 }
 
-func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, peers *peerPool, nodeID string, concurrency int) *Downloader {
+func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, peers *peerPool, nodeID string, concurrency int, mgr *DownloaderManager) *Downloader {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Downloader{
 		treeID:      need.TreeID,
@@ -123,6 +130,7 @@ func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo top
 		peers:       peers,
 		nodeID:      nodeID,
 		concurrency: concurrency,
+		mgr:         mgr,
 		ctx:         ctx,
 		cancel:      cancel,
 		inflight:    make(map[int64]bool),
@@ -139,17 +147,73 @@ func (d *Downloader) ensureSizeLocked(size int64) {
 		d.size = size
 		d.numPieces = (size + PieceSize - 1) / PieceSize
 	}
-	if !d.started && d.size > 0 {
-		d.started = true
-		go d.run()
-	}
 }
 
-// Ensure records the file size and starts fetching if needed. Idempotent.
+// startLocked starts the fetch loop if a size is known and it is not already
+// running. Call with d.mu held.
+func (d *Downloader) startLocked() {
+	if d.running || d.size <= 0 {
+		return
+	}
+	d.running = true
+	go d.run()
+}
+
+// Ensure records the file size. Fetching starts only once a need exists
+// (a waiter, a subscriber, or a root job).
 func (d *Downloader) Ensure(size int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ensureSizeLocked(size)
+}
+
+// ============ need model ============
+
+// addNeed registers one holder of the file (child subscriber or active piece
+// waiter) and starts fetching if possible.
+func (d *Downloader) addNeed() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.need++
+	d.startLocked()
+}
+
+// markJobNeed registers the driving need of a root job. It is released by the
+// downloader itself once the file completes.
+func (d *Downloader) markJobNeed() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.jobNeed {
+		d.jobNeed = true
+		d.need++
+	}
+	d.startLocked()
+}
+
+// releaseNeed drops one holder. When the last need goes away and the file is
+// not complete, the downloader stops fetching and is reclaimed, so upstream
+// leases expire naturally and the stop propagates toward the source.
+func (d *Downloader) releaseNeed() {
+	d.mu.Lock()
+	if d.need > 0 {
+		d.need--
+	}
+	stop := d.need == 0 && !d.complete && d.fileErr == nil
+	d.mu.Unlock()
+	if stop {
+		d.stopSilent()
+	}
+}
+
+// stopSilent stops a downloader that is no longer needed: in-flight fetches
+// are canceled and the manager drops it (the file data stays in the store).
+func (d *Downloader) stopSilent() {
+	d.mu.Lock()
+	if d.fileErr == nil && !d.complete {
+		d.cancel()
+	}
+	d.mu.Unlock()
+	d.mgr.removeTerminal(d)
 }
 
 // WaitPiece returns the piece bytes, downloading the file if necessary.
@@ -172,8 +236,11 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 	// request is retried immediately instead of waiting out the backoff.
 	delete(d.cooldown, index)
 	d.waiters[index] = append(d.waiters[index], w)
-	d.ensureSizeLocked(d.size) // size may be 0 if only WaitPiece was called; nothing to fetch yet
+	d.need++ // this waiter holds one unit of local need until it exits
+	d.ensureSizeLocked(d.size)
+	d.startLocked()
 	d.mu.Unlock()
+	defer d.releaseNeed()
 
 	select {
 	case err := <-w.ch:
@@ -267,7 +334,22 @@ func (d *Downloader) run() {
 		wg.Wait()
 		d.mu.Lock()
 		d.checkCompleteLocked()
+		complete := d.complete
+		failed := d.fileErr != nil
+		if complete && d.jobNeed {
+			// The driving root job is satisfied; release its need.
+			d.jobNeed = false
+			if d.need > 0 {
+				d.need--
+			}
+		}
+		d.running = false
 		d.mu.Unlock()
+		// Terminal downloaders are reclaimed so the manager cannot grow
+		// unbounded; the file data stays in the PieceStore.
+		if complete || failed {
+			d.mgr.removeTerminal(d)
+		}
 	}()
 	for {
 		d.mu.Lock()
@@ -591,11 +673,31 @@ func (m *DownloaderManager) Ensure(need FileNeed) *Downloader {
 		if need.Source != nil {
 			src = need.Source
 		}
-		d = newDownloader(need, m.store, m.banned, m.topo, m.source, src, m.peers, m.nodeID, m.concurrency)
+		d = newDownloader(need, m.store, m.banned, m.topo, m.source, src, m.peers, m.nodeID, m.concurrency, m)
 		m.files[key] = d
 	}
 	d.Ensure(need.Size)
 	return d
+}
+
+// Get returns the active downloader for a file, or nil.
+func (m *DownloaderManager) Get(treeID, filename string) *Downloader {
+	key := treeID + "\x00" + filename
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.files[key]
+}
+
+// removeTerminal drops a terminal (complete or failed) downloader from the
+// map so the manager cannot grow unbounded. The guard prevents removing a
+// newer downloader that replaced this one.
+func (m *DownloaderManager) removeTerminal(d *Downloader) {
+	key := d.treeID + "\x00" + d.filename
+	m.mu.Lock()
+	if m.files[key] == d {
+		delete(m.files, key)
+	}
+	m.mu.Unlock()
 }
 
 // CancelFile stops the downloader for a file (banned arrival / job removal).

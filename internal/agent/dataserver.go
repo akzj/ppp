@@ -159,6 +159,10 @@ func progressPercent(downloaded, size int64) int32 {
 }
 
 // Subscribe (re)establishes a session lease for a child; idempotent renewal.
+// The granted duration is min(requested, server TTL) and matches the actual
+// expiry stored by the lease manager, so a child renewing by the granted
+// duration never falls out of alignment. Subscribing also adds one unit of
+// child need to the file's downloader (kept alive while subscribed).
 func (s *DataServer) Subscribe(_ context.Context, req *pppv1.SubscribeRequest) (*pppv1.SubscribeResponse, error) {
 	key := req.GetKey()
 	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" || req.GetChildNodeId() == "" {
@@ -167,20 +171,29 @@ func (s *DataServer) Subscribe(_ context.Context, req *pppv1.SubscribeRequest) (
 	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
 		return &pppv1.SubscribeResponse{Accepted: false, Banned: true}, nil
 	}
-	lease := time.Duration(req.GetLeaseSeconds()) * time.Second
-	if lease <= 0 {
-		lease = s.leases.ttl
+	requested := time.Duration(req.GetLeaseSeconds()) * time.Second
+	if requested <= 0 || requested > s.leases.ttl {
+		requested = s.leases.ttl
 	}
-	s.leases.Renew(key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId(), time.Now())
-	return &pppv1.SubscribeResponse{Accepted: true, GrantedLeaseSeconds: int64(lease.Seconds())}, nil
+	s.leases.Renew(requested, key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId(), time.Now())
+	// Child need: keep the downloader alive while any child is subscribed,
+	// unless the file is already fully cached (serving is store hits only).
+	if !s.store.IsComplete(key.GetTreeId(), key.GetFilename()) {
+		s.dm.Ensure(FileNeed{TreeID: key.GetTreeId(), Filename: key.GetFilename()}).addNeed()
+	}
+	return &pppv1.SubscribeResponse{Accepted: true, GrantedLeaseSeconds: int64(requested.Seconds())}, nil
 }
 
-// Unsubscribe removes a session lease.
+// Unsubscribe removes a session lease and releases its child need.
 func (s *DataServer) Unsubscribe(_ context.Context, req *pppv1.UnsubscribeRequest) (*pppv1.UnsubscribeResponse, error) {
 	key := req.GetKey()
 	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
 	}
-	s.leases.Remove(key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId())
+	if s.leases.Remove(key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId()) {
+		if d := s.dm.Get(key.GetTreeId(), key.GetFilename()); d != nil {
+			d.releaseNeed()
+		}
+	}
 	return &pppv1.UnsubscribeResponse{Ok: true}, nil
 }
