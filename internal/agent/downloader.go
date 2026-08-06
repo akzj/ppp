@@ -401,6 +401,12 @@ func (d *Downloader) run() {
 			d.mu.Unlock()
 			break
 		}
+		if d.cooldownCleared[index] {
+			// This is the one allowed demand retry; re-apply the cooldown
+			// immediately so a concurrent/dense run cannot dispatch the piece
+			// again while it is being fetched (P2-1).
+			d.cooldown[index] = time.Now().Add(pieceCooldown)
+		}
 		d.inflight[index] = true
 		d.mu.Unlock()
 
@@ -438,6 +444,11 @@ func (d *Downloader) nextMissingLocked() int64 {
 		if now.Before(d.cooldown[i]) {
 			continue // persistent failure recently; back off (P1-2)
 		}
+		// A piece demand-cleared once must wait out its cooldown before being
+		// dispatched again, even if the cooldown was cleared (P2-1 anti-flood).
+		if d.cooldownCleared[i] && !d.store.HasPiece(d.treeID, d.filename, i) && now.Before(d.cooldown[i]) {
+			continue
+		}
 		if !d.store.HasPiece(d.treeID, d.filename, i) {
 			return i
 		}
@@ -463,10 +474,14 @@ func (d *Downloader) checkCompleteLocked() {
 func (d *Downloader) fetchPiece(index int64) {
 	// Every exit path (including ctx cancellation) clears the in-flight mark,
 	// so a silently stopped downloader restarted later can re-dispatch the
-	// piece (P1-B).
+	// piece (P1-B). A demand-cleared retry that did not succeed re-enters the
+	// cooldown so dense waiters cannot keep re-dispatching it (P2-1).
 	defer func() {
 		d.mu.Lock()
 		delete(d.inflight, index)
+		if d.cooldownCleared[index] && !d.store.HasPiece(d.treeID, d.filename, index) && d.fileErr == nil {
+			d.cooldown[index] = time.Now().Add(pieceCooldown)
+		}
 		d.mu.Unlock()
 	}()
 
