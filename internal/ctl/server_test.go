@@ -985,3 +985,42 @@ func TestGRPCShutdownWithActiveWatch(t *testing.T) {
 		t.Fatal("shutdown hung with an active watch stream")
 	}
 }
+
+// TestGRPCDeleteTreeEndsWatchStreams verifies P2-4: deleting a tree ends the
+// active watch streams for that tree instead of leaving zombie connections.
+func TestGRPCDeleteTreeEndsWatchStreams(t *testing.T) {
+	client, cleanup := startTestGRPC(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.CreateTree(ctx, &pppv1.CreateTreeRequest{
+		Tree: &pppv1.Tree{Id: "t1", App: "app", Environment: "prod", Idc: "idc1", RootCount: 3, GroupMembers: 2, GroupChildren: 2},
+	}); err != nil {
+		t.Fatalf("CreateTree: %v", err)
+	}
+	stream, err := client.WatchBannedList(ctx, &pppv1.WatchBannedListRequest{TreeId: "t1"})
+	if err != nil {
+		t.Fatalf("WatchBannedList: %v", err)
+	}
+	recvBanned(t, stream) // consume the initial snapshot
+
+	if _, err := client.DeleteTree(ctx, &pppv1.DeleteTreeRequest{TreeId: "t1"}); err != nil {
+		t.Fatalf("DeleteTree: %v", err)
+	}
+
+	// The watch stream must end (EOF / clean close) promptly.
+	type res struct {
+		up  *pppv1.BannedListUpdate
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() { up, err := stream.Recv(); ch <- res{up, err} }()
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			t.Fatalf("expected stream to end after DeleteTree, got update %v", r.up)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch stream still open after DeleteTree")
+	}
+}
