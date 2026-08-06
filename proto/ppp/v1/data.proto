@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package ppp.v1;
+
+import "ppp/v1/common.proto";
+
+option go_package = "github.com/akzj/ppp/gen/ppp/v1;pppv1";
+
+// Data is the ppp-service data plane service (node-to-node + leaf pulls).
+// Cancellation is not done via hop-by-hop RPC: requests for a banned file
+// are rejected directly (see common.BannedFile).
+service Data {
+  // Fetch a single piece by index (unary, one 4MB piece per call)
+  rpc GetPiece(GetPieceRequest) returns (GetPieceResponse);
+  // Full file download with progress stream (leaf SDK / leaf apps)
+  rpc DownloadFile(DownloadFileRequest) returns (stream ProgressState);
+
+  // Session subscription lease (per-child per-job, NOT per-piece).
+  // Pure relay nodes use this to stop downloading early once the last
+  // subscriber leaves.
+  rpc Subscribe(SubscribeRequest) returns (SubscribeResponse);
+  rpc Unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse);
+}
+
+message GetPieceRequest {
+  TreeKey key = 1;
+  int64 index = 2;
+  int64 size = 3;            // total file size (for validation)
+  string job_id = 4;         // locally or center generated
+  repeated Hop from = 5;     // loop-prevention path (nodeID + jobID)
+}
+message Hop {
+  string node_id = 1;
+  string job_id = 2;
+}
+
+message GetPieceResponse {
+  oneof result {
+    Piece piece = 1;
+    Error error = 2;
+  }
+}
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+  enum ErrorCode {
+    ERROR_CODE_UNSPECIFIED = 0;
+    BANNED = 1;              // forbidden to distribute (canceled)
+    NOT_FOUND = 2;           // piece/file not found
+    LOOP_DETECTED = 3;
+    BAD_REQUEST = 4;
+    INTERNAL = 5;
+  }
+}
+
+message DownloadFileRequest {
+  TreeKey key = 1;
+  int64 size = 2;
+  string job_id = 3;
+  repeated Hop from = 4;
+}
+
+message SubscribeRequest {
+  TreeKey key = 1;
+  string job_id = 2;
+  string child_node_id = 3;
+  int64 lease_seconds = 4;   // lease duration, renewed by heartbeat
+}
+message SubscribeResponse {
+  bool accepted = 1;
+  bool banned = 2;           // file is forbidden to distribute
+}
+
+message UnsubscribeRequest {
+  TreeKey key = 1;
+  string job_id = 2;
+  string child_node_id = 3;
+}
+message UnsubscribeResponse {
+  bool ok = 1;
+}

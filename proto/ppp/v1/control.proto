@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package ppp.v1;
+
+import "ppp/v1/common.proto";
+
+option go_package = "github.com/akzj/ppp/gen/ppp/v1;pppv1";
+
+// Control is the ppp-ctl-server public service (central control plane).
+// - Nodes register/heartbeat and sync topology and the banned list here.
+// - Orchestration systems create/query/cancel distribution jobs here.
+service Control {
+  // ===== Node onboarding =====
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Topology change push (incremental; full snapshot on reconnect)
+  rpc WatchTopology(WatchTopologyRequest) returns (stream TopologyUpdate);
+  // Banned list incremental push (persistent cancellation)
+  rpc WatchBannedList(WatchBannedListRequest) returns (stream BannedListUpdate);
+  // Full banned list sync on reconnect (with generation)
+  rpc SyncBannedList(SyncBannedListRequest) returns (SyncBannedListResponse);
+
+  // ===== Job orchestration =====
+  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
+  rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+  // Node progress reporting
+  rpc SyncProgress(stream ProgressRecord) returns (SyncProgressResponse);
+}
+
+message RegisterNodeRequest {
+  Node node = 1;
+}
+message RegisterNodeResponse {
+  Tree tree = 1;                 // owning tree + topology generation
+  Topology topology = 2;         // initial topology (parent addrs)
+  repeated BannedFile banned = 3; // initial banned list
+}
+
+message HeartbeatRequest {
+  Node node = 1;
+}
+message HeartbeatResponse {
+  int64 topology_generation = 1; // if mismatched with node, re-pull topology
+  int64 banned_generation = 2;
+}
+
+message WatchTopologyRequest {
+  string tree_id = 1;
+  int64 from_generation = 2;
+}
+message TopologyUpdate {
+  int64 generation = 1;
+  Topology topology = 2;
+}
+
+// Topology is the per-node upstream address table within a tree.
+message Topology {
+  string tree_id = 1;
+  int64 generation = 2;
+  // node_id -> upstream node addrs (ordered; random/round-robin selection)
+  map<string, NodeUpstream> node_upstreams = 3;
+}
+message NodeUpstream {
+  repeated string addrs = 1; // parent node gRPC addrs
+}
+
+message WatchBannedListRequest {
+  string tree_id = 1;
+  int64 from_generation = 2;
+}
+message BannedListUpdate {
+  int64 generation = 1;
+  repeated BannedFile added = 2;
+  // unban reserved: repeated TreeKey removed = 3;
+}
+message SyncBannedListRequest {
+  string tree_id = 1;
+  int64 from_generation = 2;
+}
+message SyncBannedListResponse {
+  int64 generation = 1;
+  repeated BannedFile banned = 2;
+}
+
+message CreateJobRequest {
+  string tree_id = 1;
+  string filename = 2;
+  int64 size = 3;
+  string md5 = 4;
+  Source source = 5;              // override tree default source (optional)
+  repeated string target_node_ids = 6; // empty = whole tree
+}
+message CreateJobResponse {
+  Job job = 1;
+}
+
+message QueryJobRequest {
+  string job_id = 1;
+}
+message QueryJobResponse {
+  Job job = 1;
+}
+
+message CancelJobRequest {
+  // job_id may be center-generated; locally-initiated tasks may also cancel
+  // by (tree_id, filename).
+  string job_id = 1;
+  string tree_id = 2;
+  string filename = 3;
+  string reason = 4;
+}
+message CancelJobResponse {
+  bool canceled = 1;
+}
+
+message ListJobsRequest {
+  string tree_id = 1;
+  Job.JobState state = 2;
+}
+message ListJobsResponse {
+  repeated Job jobs = 1;
+}
+
+message ProgressRecord {
+  ProgressState state = 1;
+  string node_id = 2;
+}
+message SyncProgressResponse {
+  bool ok = 1;
+}
