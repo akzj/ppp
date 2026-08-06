@@ -34,6 +34,8 @@ type fakeDataServer struct {
 	failures      int
 	zeroHashFirst int // serve this many pieces with hash==0
 	requests      int
+	subscribes    int
+	unsubscribes  int
 	release       chan struct{} // when set, GetPiece blocks until released or ctx done
 	lastFrom      []*pppv1.Hop
 }
@@ -54,6 +56,32 @@ func (f *fakeDataServer) requestCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests
+}
+
+func (f *fakeDataServer) subscribeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subscribes
+}
+
+func (f *fakeDataServer) unsubscribeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unsubscribes
+}
+
+func (f *fakeDataServer) Subscribe(_ context.Context, _ *pppv1.SubscribeRequest) (*pppv1.SubscribeResponse, error) {
+	f.mu.Lock()
+	f.subscribes++
+	f.mu.Unlock()
+	return &pppv1.SubscribeResponse{Accepted: true}, nil
+}
+
+func (f *fakeDataServer) Unsubscribe(_ context.Context, _ *pppv1.UnsubscribeRequest) (*pppv1.UnsubscribeResponse, error) {
+	f.mu.Lock()
+	f.unsubscribes++
+	f.mu.Unlock()
+	return &pppv1.UnsubscribeResponse{Ok: true}, nil
 }
 
 func (f *fakeDataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (*pppv1.GetPieceResponse, error) {
