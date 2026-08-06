@@ -278,8 +278,8 @@ func TestStoreJobs(t *testing.T) {
 	}
 }
 
-// TestStoreProgressUpsert verifies progress records are accepted and latest
-// per (tree, filename, node) is kept.
+// TestStoreProgressUpsert verifies progress records are accepted and the
+// latest per (tree, job, filename, node) is kept.
 func TestStoreProgressUpsert(t *testing.T) {
 	st := newTestStore(t)
 
@@ -288,23 +288,49 @@ func TestStoreProgressUpsert(t *testing.T) {
 		t.Fatal("UpsertProgress with empty record: want error, got nil")
 	}
 
-	p1 := &pppv1.ProgressState{TreeId: "t1", Filename: "a.bin", Progress: 50}
+	p1 := &pppv1.ProgressState{TreeId: "t1", JobId: "job:1", Filename: "a.bin", Progress: 50}
 	if err := st.UpsertProgress(p1, "n1"); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
-	p2 := &pppv1.ProgressState{TreeId: "t1", Filename: "a.bin", Progress: 80}
+	p2 := &pppv1.ProgressState{TreeId: "t1", JobId: "job:1", Filename: "a.bin", Progress: 80}
 	if err := st.UpsertProgress(p2, "n1"); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
-	if err := st.UpsertProgress(&pppv1.ProgressState{TreeId: "t1", Filename: "a.bin", Progress: 10}, "n2"); err != nil {
+	if err := st.UpsertProgress(&pppv1.ProgressState{TreeId: "t1", JobId: "job:1", Filename: "a.bin", Progress: 10}, "n2"); err != nil {
+		t.Fatalf("UpsertProgress: %v", err)
+	}
+	// A different job is a distinct key.
+	if err := st.UpsertProgress(&pppv1.ProgressState{TreeId: "t1", JobId: "job:2", Filename: "a.bin", Progress: 99}, "n1"); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
 
 	st.mu.Lock()
-	latest := st.progress[progressKey("t1", "a.bin", "n1")]
+	latest := st.progress[progressKey("t1", "job:1", "a.bin", "n1")]
 	st.mu.Unlock()
 	if latest.GetProgress() != 80 {
-		t.Fatalf("latest progress for (t1,a.bin,n1) = %d, want 80", latest.GetProgress())
+		t.Fatalf("latest progress for (t1,job:1,a.bin,n1) = %d, want 80", latest.GetProgress())
+	}
+
+	all, err := st.ListProgress("t1")
+	if err != nil {
+		t.Fatalf("ListProgress: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListProgress(t1) len = %d, want 3", len(all))
+	}
+	none, err := st.ListProgress("t2")
+	if err != nil {
+		t.Fatalf("ListProgress(t2): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("ListProgress(t2) len = %d, want 0", len(none))
+	}
+	allAll, err := st.ListProgress("")
+	if err != nil {
+		t.Fatalf("ListProgress(\"\"): %v", err)
+	}
+	if len(allAll) != 3 {
+		t.Fatalf("ListProgress(\"\") len = %d, want 3", len(allAll))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
@@ -28,6 +29,9 @@ type Store interface {
 	GetTree(id string) (*pppv1.Tree, error)
 	ListTrees() ([]*pppv1.Tree, error)
 	DeleteTree(id string) error
+	// DeleteTreeData cascade-removes every record of a tree (nodes, jobs,
+	// banned, progress) without touching the tree record itself.
+	DeleteTreeData(treeID string) error
 
 	// Nodes are persisted so restarts keep the registered node set.
 	// ListNodes returns the nodes of one tree, or all nodes when treeID is
@@ -57,9 +61,11 @@ type Store interface {
 	JobsByFile(treeID, filename string) ([]*pppv1.Job, error)
 
 	// UpsertProgress keeps the latest progress report per
-	// (tree_id, filename, node_id). It is kept in memory in phase 1 and made
-	// durable in phase 4.
+	// (tree_id, job_id, filename, node_id). It is kept in memory in phase 1
+	// and made durable in phase 4. ListProgress returns the reports of one
+	// tree (empty treeID returns all).
 	UpsertProgress(p *pppv1.ProgressState, nodeID string) error
+	ListProgress(treeID string) ([]*pppv1.ProgressState, error)
 
 	Close() error
 }
@@ -180,6 +186,71 @@ func (s *bboltStore) DeleteTree(id string) error {
 			return ErrNotFound
 		}
 		return tx.Bucket(bucketTrees).Delete([]byte(id))
+	})
+}
+
+func (s *bboltStore) DeleteTreeData(treeID string) error {
+	if treeID == "" {
+		return errors.New("ctl: tree id is required")
+	}
+	// Progress lives in memory.
+	s.mu.Lock()
+	for k := range s.progress {
+		if strings.HasPrefix(k, treeID+"\x00") {
+			delete(s.progress, k)
+		}
+	}
+	s.mu.Unlock()
+
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		// Keys are collected first because modifying a bucket while
+		// iterating it is not safe.
+		collect := func(b *bbolt.Bucket, prefix []byte) ([][]byte, error) {
+			var keys [][]byte
+			c := b.Cursor()
+			for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+				keys = append(keys, append([]byte(nil), k...))
+			}
+			return keys, nil
+		}
+		nodeKeys, err := collect(tx.Bucket(bucketNodes), []byte(treeID+"\x00"))
+		if err != nil {
+			return err
+		}
+		for _, k := range nodeKeys {
+			if err := tx.Bucket(bucketNodes).Delete(k); err != nil {
+				return err
+			}
+		}
+		bannedKeys, err := collect(tx.Bucket(bucketBanned), []byte(treeID+"\x00"))
+		if err != nil {
+			return err
+		}
+		for _, k := range bannedKeys {
+			if err := tx.Bucket(bucketBanned).Delete(k); err != nil {
+				return err
+			}
+		}
+		var jobKeys [][]byte
+		err = tx.Bucket(bucketJobs).ForEach(func(k, v []byte) error {
+			j := &pppv1.Job{}
+			if err := proto.Unmarshal(v, j); err != nil {
+				return err
+			}
+			if j.GetTreeId() == treeID {
+				jobKeys = append(jobKeys, append([]byte(nil), k...))
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, k := range jobKeys {
+			if err := tx.Bucket(bucketJobs).Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -484,8 +555,8 @@ func (s *bboltStore) JobsByFile(treeID, filename string) ([]*pppv1.Job, error) {
 // ============ Progress ============
 
 // progressKey uniquely identifies a progress report.
-func progressKey(treeID, filename, nodeID string) string {
-	return treeID + "\x00" + filename + "\x00" + nodeID
+func progressKey(treeID, jobID, filename, nodeID string) string {
+	return treeID + "\x00" + jobID + "\x00" + filename + "\x00" + nodeID
 }
 
 func (s *bboltStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error {
@@ -494,6 +565,20 @@ func (s *bboltStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.progress[progressKey(p.GetTreeId(), p.GetFilename(), nodeID)] = p
+	s.progress[progressKey(p.GetTreeId(), p.GetJobId(), p.GetFilename(), nodeID)] = p
 	return nil
+}
+
+// ListProgress returns the latest progress report per node for a tree (all
+// trees when treeID is empty). Order is unspecified.
+func (s *bboltStore) ListProgress(treeID string) ([]*pppv1.ProgressState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*pppv1.ProgressState
+	for k, p := range s.progress {
+		if treeID == "" || strings.HasPrefix(k, treeID+"\x00") {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
