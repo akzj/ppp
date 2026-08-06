@@ -175,10 +175,11 @@ func (s *DataServer) Subscribe(_ context.Context, req *pppv1.SubscribeRequest) (
 	if requested <= 0 || requested > s.leases.ttl {
 		requested = s.leases.ttl
 	}
-	s.leases.Renew(requested, key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId(), time.Now())
-	// Child need: keep the downloader alive while any child is subscribed,
-	// unless the file is already fully cached (serving is store hits only).
-	if !s.store.IsComplete(key.GetTreeId(), key.GetFilename()) {
+	created := s.leases.Renew(requested, key.GetTreeId(), key.GetFilename(), req.GetJobId(), req.GetChildNodeId(), time.Now())
+	// Child need is added only when the subscription is NEW: idempotent
+	// renewals must not grow the need counter. Files already fully cached
+	// need no downloader (serving is store hits only).
+	if created && !s.store.IsComplete(key.GetTreeId(), key.GetFilename()) {
 		s.dm.Ensure(FileNeed{TreeID: key.GetTreeId(), Filename: key.GetFilename()}).addNeed()
 	}
 	return &pppv1.SubscribeResponse{Accepted: true, GrantedLeaseSeconds: int64(requested.Seconds())}, nil

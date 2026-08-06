@@ -27,11 +27,16 @@ func NewLeaseManager(ttl time.Duration) *LeaseManager {
 
 // Renew (re)establishes a lease for the key, extending it by the explicit
 // duration. The expiry stored is exactly now+duration, so a child renewing by
-// the granted duration never falls out of alignment.
-func (l *LeaseManager) Renew(d time.Duration, treeID, filename, jobID, childNodeID string, now time.Time) {
+// the granted duration never falls out of alignment. It reports whether the
+// lease was newly created (false for an idempotent renewal), which callers use
+// to avoid double-counting a downloader need.
+func (l *LeaseManager) Renew(d time.Duration, treeID, filename, jobID, childNodeID string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.leases[leaseKey{treeID, filename, jobID, childNodeID}] = now.Add(d)
+	key := leaseKey{treeID, filename, jobID, childNodeID}
+	_, existed := l.leases[key]
+	l.leases[key] = now.Add(d)
+	return !existed
 }
 
 // Remove deletes a lease and reports whether one existed.
