@@ -414,7 +414,7 @@ type SubscribeRequest struct {
 	Key           *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	JobId         string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	ChildNodeId   string                 `protobuf:"bytes,3,opt,name=child_node_id,json=childNodeId,proto3" json:"child_node_id,omitempty"`
-	LeaseSeconds  int64                  `protobuf:"varint,4,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"` // lease duration, renewed by heartbeat
+	LeaseSeconds  int64                  `protobuf:"varint,4,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"` // requested lease duration (default 30s if 0)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -478,11 +478,12 @@ func (x *SubscribeRequest) GetLeaseSeconds() int64 {
 }
 
 type SubscribeResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Banned        bool                   `protobuf:"varint,2,opt,name=banned,proto3" json:"banned,omitempty"` // file is forbidden to distribute
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Accepted            bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Banned              bool                   `protobuf:"varint,2,opt,name=banned,proto3" json:"banned,omitempty"`                                                        // file is forbidden to distribute
+	GrantedLeaseSeconds int64                  `protobuf:"varint,3,opt,name=granted_lease_seconds,json=grantedLeaseSeconds,proto3" json:"granted_lease_seconds,omitempty"` // actual lease granted; renew before expiry
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *SubscribeResponse) Reset() {
@@ -527,6 +528,13 @@ func (x *SubscribeResponse) GetBanned() bool {
 		return x.Banned
 	}
 	return false
+}
+
+func (x *SubscribeResponse) GetGrantedLeaseSeconds() int64 {
+	if x != nil {
+		return x.GrantedLeaseSeconds
+	}
+	return 0
 }
 
 type UnsubscribeRequest struct {
@@ -671,10 +679,11 @@ const file_ppp_v1_data_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\"\n" +
 	"\rchild_node_id\x18\x03 \x01(\tR\vchildNodeId\x12#\n" +
-	"\rlease_seconds\x18\x04 \x01(\x03R\fleaseSeconds\"G\n" +
+	"\rlease_seconds\x18\x04 \x01(\x03R\fleaseSeconds\"{\n" +
 	"\x11SubscribeResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
-	"\x06banned\x18\x02 \x01(\bR\x06banned\"r\n" +
+	"\x06banned\x18\x02 \x01(\bR\x06banned\x122\n" +
+	"\x15granted_lease_seconds\x18\x03 \x01(\x03R\x13grantedLeaseSeconds\"r\n" +
 	"\x12UnsubscribeRequest\x12!\n" +
 	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\"\n" +

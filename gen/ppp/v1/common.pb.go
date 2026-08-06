@@ -246,8 +246,8 @@ type Tree struct {
 	App           string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`
 	Environment   string                 `protobuf:"bytes,3,opt,name=environment,proto3" json:"environment,omitempty"` // dev|beta|pre|prod
 	Idc           string                 `protobuf:"bytes,4,opt,name=idc,proto3" json:"idc,omitempty"`
-	Cluster       string                 `protobuf:"bytes,5,opt,name=cluster,proto3" json:"cluster,omitempty"`
-	RootCount     int32                  `protobuf:"varint,6,opt,name=root_count,json=rootCount,proto3" json:"root_count,omitempty"`             // number of root nodes, 1-3 (configurable)
+	Cluster       string                 `protobuf:"bytes,5,opt,name=cluster,proto3" json:"cluster,omitempty"`                                   // optional deployment metadata; NOT part of tree identity
+	RootCount     int32                  `protobuf:"varint,6,opt,name=root_count,json=rootCount,proto3" json:"root_count,omitempty"`             // number of root nodes, 1-3 (configurable; enforced by ctl)
 	GroupMembers  int32                  `protobuf:"varint,7,opt,name=group_members,json=groupMembers,proto3" json:"group_members,omitempty"`    // nodes per group (non-root layers)
 	GroupChildren int32                  `protobuf:"varint,8,opt,name=group_children,json=groupChildren,proto3" json:"group_children,omitempty"` // child groups per group
 	Source        *Source                `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"`                                     // source: OSS/S3/HTTP/HTTPS (roots pull from source)

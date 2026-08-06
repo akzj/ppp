@@ -21,6 +21,350 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CreateTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tree          *Tree                  `protobuf:"bytes,1,opt,name=tree,proto3" json:"tree,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTreeRequest) Reset() {
+	*x = CreateTreeRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTreeRequest) ProtoMessage() {}
+
+func (x *CreateTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTreeRequest.ProtoReflect.Descriptor instead.
+func (*CreateTreeRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *CreateTreeRequest) GetTree() *Tree {
+	if x != nil {
+		return x.Tree
+	}
+	return nil
+}
+
+type CreateTreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tree          *Tree                  `protobuf:"bytes,1,opt,name=tree,proto3" json:"tree,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTreeResponse) Reset() {
+	*x = CreateTreeResponse{}
+	mi := &file_ppp_v1_control_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTreeResponse) ProtoMessage() {}
+
+func (x *CreateTreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTreeResponse.ProtoReflect.Descriptor instead.
+func (*CreateTreeResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CreateTreeResponse) GetTree() *Tree {
+	if x != nil {
+		return x.Tree
+	}
+	return nil
+}
+
+type GetTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTreeRequest) Reset() {
+	*x = GetTreeRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTreeRequest) ProtoMessage() {}
+
+func (x *GetTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTreeRequest.ProtoReflect.Descriptor instead.
+func (*GetTreeRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GetTreeRequest) GetTreeId() string {
+	if x != nil {
+		return x.TreeId
+	}
+	return ""
+}
+
+type GetTreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tree          *Tree                  `protobuf:"bytes,1,opt,name=tree,proto3" json:"tree,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTreeResponse) Reset() {
+	*x = GetTreeResponse{}
+	mi := &file_ppp_v1_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTreeResponse) ProtoMessage() {}
+
+func (x *GetTreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTreeResponse.ProtoReflect.Descriptor instead.
+func (*GetTreeResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetTreeResponse) GetTree() *Tree {
+	if x != nil {
+		return x.Tree
+	}
+	return nil
+}
+
+type ListTreesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTreesRequest) Reset() {
+	*x = ListTreesRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTreesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTreesRequest) ProtoMessage() {}
+
+func (x *ListTreesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTreesRequest.ProtoReflect.Descriptor instead.
+func (*ListTreesRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+type ListTreesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Trees         []*Tree                `protobuf:"bytes,1,rep,name=trees,proto3" json:"trees,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTreesResponse) Reset() {
+	*x = ListTreesResponse{}
+	mi := &file_ppp_v1_control_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTreesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTreesResponse) ProtoMessage() {}
+
+func (x *ListTreesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTreesResponse.ProtoReflect.Descriptor instead.
+func (*ListTreesResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ListTreesResponse) GetTrees() []*Tree {
+	if x != nil {
+		return x.Trees
+	}
+	return nil
+}
+
+type DeleteTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTreeRequest) Reset() {
+	*x = DeleteTreeRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTreeRequest) ProtoMessage() {}
+
+func (x *DeleteTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTreeRequest.ProtoReflect.Descriptor instead.
+func (*DeleteTreeRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DeleteTreeRequest) GetTreeId() string {
+	if x != nil {
+		return x.TreeId
+	}
+	return ""
+}
+
+type DeleteTreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTreeResponse) Reset() {
+	*x = DeleteTreeResponse{}
+	mi := &file_ppp_v1_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTreeResponse) ProtoMessage() {}
+
+func (x *DeleteTreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTreeResponse.ProtoReflect.Descriptor instead.
+func (*DeleteTreeResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DeleteTreeResponse) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
 type RegisterNodeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Node          *Node                  `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
@@ -30,7 +374,7 @@ type RegisterNodeRequest struct {
 
 func (x *RegisterNodeRequest) Reset() {
 	*x = RegisterNodeRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[0]
+	mi := &file_ppp_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -42,7 +386,7 @@ func (x *RegisterNodeRequest) String() string {
 func (*RegisterNodeRequest) ProtoMessage() {}
 
 func (x *RegisterNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[0]
+	mi := &file_ppp_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -55,7 +399,7 @@ func (x *RegisterNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterNodeRequest.ProtoReflect.Descriptor instead.
 func (*RegisterNodeRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{0}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RegisterNodeRequest) GetNode() *Node {
@@ -76,7 +420,7 @@ type RegisterNodeResponse struct {
 
 func (x *RegisterNodeResponse) Reset() {
 	*x = RegisterNodeResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[1]
+	mi := &file_ppp_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -88,7 +432,7 @@ func (x *RegisterNodeResponse) String() string {
 func (*RegisterNodeResponse) ProtoMessage() {}
 
 func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[1]
+	mi := &file_ppp_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -101,7 +445,7 @@ func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterNodeResponse.ProtoReflect.Descriptor instead.
 func (*RegisterNodeResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{1}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RegisterNodeResponse) GetTree() *Tree {
@@ -134,7 +478,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[2]
+	mi := &file_ppp_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -146,7 +490,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[2]
+	mi := &file_ppp_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -159,7 +503,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{2}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *HeartbeatRequest) GetNode() *Node {
@@ -179,7 +523,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[3]
+	mi := &file_ppp_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -191,7 +535,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[3]
+	mi := &file_ppp_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -204,7 +548,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{3}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *HeartbeatResponse) GetTopologyGeneration() int64 {
@@ -231,7 +575,7 @@ type WatchTopologyRequest struct {
 
 func (x *WatchTopologyRequest) Reset() {
 	*x = WatchTopologyRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[4]
+	mi := &file_ppp_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +587,7 @@ func (x *WatchTopologyRequest) String() string {
 func (*WatchTopologyRequest) ProtoMessage() {}
 
 func (x *WatchTopologyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[4]
+	mi := &file_ppp_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +600,7 @@ func (x *WatchTopologyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchTopologyRequest.ProtoReflect.Descriptor instead.
 func (*WatchTopologyRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *WatchTopologyRequest) GetTreeId() string {
@@ -283,7 +627,7 @@ type TopologyUpdate struct {
 
 func (x *TopologyUpdate) Reset() {
 	*x = TopologyUpdate{}
-	mi := &file_ppp_v1_control_proto_msgTypes[5]
+	mi := &file_ppp_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -295,7 +639,7 @@ func (x *TopologyUpdate) String() string {
 func (*TopologyUpdate) ProtoMessage() {}
 
 func (x *TopologyUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[5]
+	mi := &file_ppp_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -308,7 +652,7 @@ func (x *TopologyUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopologyUpdate.ProtoReflect.Descriptor instead.
 func (*TopologyUpdate) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TopologyUpdate) GetGeneration() int64 {
@@ -330,7 +674,7 @@ type Topology struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	TreeId     string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
 	Generation int64                  `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
-	// node_id -> upstream node addrs (ordered; random/round-robin selection)
+	// node_id -> upstream (ordered; random/round-robin selection)
 	NodeUpstreams map[string]*NodeUpstream `protobuf:"bytes,3,rep,name=node_upstreams,json=nodeUpstreams,proto3" json:"node_upstreams,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -338,7 +682,7 @@ type Topology struct {
 
 func (x *Topology) Reset() {
 	*x = Topology{}
-	mi := &file_ppp_v1_control_proto_msgTypes[6]
+	mi := &file_ppp_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -350,7 +694,7 @@ func (x *Topology) String() string {
 func (*Topology) ProtoMessage() {}
 
 func (x *Topology) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[6]
+	mi := &file_ppp_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -363,7 +707,7 @@ func (x *Topology) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Topology.ProtoReflect.Descriptor instead.
 func (*Topology) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Topology) GetTreeId() string {
@@ -388,15 +732,16 @@ func (x *Topology) GetNodeUpstreams() map[string]*NodeUpstream {
 }
 
 type NodeUpstream struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Addrs         []string               `protobuf:"bytes,1,rep,name=addrs,proto3" json:"addrs,omitempty"` // parent node gRPC addrs
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Addrs          []string               `protobuf:"bytes,1,rep,name=addrs,proto3" json:"addrs,omitempty"`                                            // parent node gRPC addrs (empty when pulling from source)
+	PullFromSource bool                   `protobuf:"varint,2,opt,name=pull_from_source,json=pullFromSource,proto3" json:"pull_from_source,omitempty"` // primary root pulls from Source directly (disambiguates empty addrs)
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *NodeUpstream) Reset() {
 	*x = NodeUpstream{}
-	mi := &file_ppp_v1_control_proto_msgTypes[7]
+	mi := &file_ppp_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -408,7 +753,7 @@ func (x *NodeUpstream) String() string {
 func (*NodeUpstream) ProtoMessage() {}
 
 func (x *NodeUpstream) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[7]
+	mi := &file_ppp_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -421,7 +766,7 @@ func (x *NodeUpstream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeUpstream.ProtoReflect.Descriptor instead.
 func (*NodeUpstream) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *NodeUpstream) GetAddrs() []string {
@@ -429,6 +774,13 @@ func (x *NodeUpstream) GetAddrs() []string {
 		return x.Addrs
 	}
 	return nil
+}
+
+func (x *NodeUpstream) GetPullFromSource() bool {
+	if x != nil {
+		return x.PullFromSource
+	}
+	return false
 }
 
 type WatchBannedListRequest struct {
@@ -441,7 +793,7 @@ type WatchBannedListRequest struct {
 
 func (x *WatchBannedListRequest) Reset() {
 	*x = WatchBannedListRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[8]
+	mi := &file_ppp_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -453,7 +805,7 @@ func (x *WatchBannedListRequest) String() string {
 func (*WatchBannedListRequest) ProtoMessage() {}
 
 func (x *WatchBannedListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[8]
+	mi := &file_ppp_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -466,7 +818,7 @@ func (x *WatchBannedListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchBannedListRequest.ProtoReflect.Descriptor instead.
 func (*WatchBannedListRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *WatchBannedListRequest) GetTreeId() string {
@@ -486,14 +838,17 @@ func (x *WatchBannedListRequest) GetFromGeneration() int64 {
 type BannedListUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Generation    int64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
-	Added         []*BannedFile          `protobuf:"bytes,2,rep,name=added,proto3" json:"added,omitempty"` // unban reserved: repeated TreeKey removed = 3;
+	Added         []*BannedFile          `protobuf:"bytes,2,rep,name=added,proto3" json:"added,omitempty"`                                    // newly banned files
+	FullSnapshot  bool                   `protobuf:"varint,3,opt,name=full_snapshot,json=fullSnapshot,proto3" json:"full_snapshot,omitempty"` // true when this update is a full snapshot
+	Snapshot      []*BannedFile          `protobuf:"bytes,4,rep,name=snapshot,proto3" json:"snapshot,omitempty"`                              // full banned list (valid when full_snapshot=true)
+	Removed       []*TreeKey             `protobuf:"bytes,5,rep,name=removed,proto3" json:"removed,omitempty"`                                // unbanned files
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BannedListUpdate) Reset() {
 	*x = BannedListUpdate{}
-	mi := &file_ppp_v1_control_proto_msgTypes[9]
+	mi := &file_ppp_v1_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -505,7 +860,7 @@ func (x *BannedListUpdate) String() string {
 func (*BannedListUpdate) ProtoMessage() {}
 
 func (x *BannedListUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[9]
+	mi := &file_ppp_v1_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +873,7 @@ func (x *BannedListUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BannedListUpdate.ProtoReflect.Descriptor instead.
 func (*BannedListUpdate) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *BannedListUpdate) GetGeneration() int64 {
@@ -535,6 +890,27 @@ func (x *BannedListUpdate) GetAdded() []*BannedFile {
 	return nil
 }
 
+func (x *BannedListUpdate) GetFullSnapshot() bool {
+	if x != nil {
+		return x.FullSnapshot
+	}
+	return false
+}
+
+func (x *BannedListUpdate) GetSnapshot() []*BannedFile {
+	if x != nil {
+		return x.Snapshot
+	}
+	return nil
+}
+
+func (x *BannedListUpdate) GetRemoved() []*TreeKey {
+	if x != nil {
+		return x.Removed
+	}
+	return nil
+}
+
 type SyncBannedListRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	TreeId         string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
@@ -545,7 +921,7 @@ type SyncBannedListRequest struct {
 
 func (x *SyncBannedListRequest) Reset() {
 	*x = SyncBannedListRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[10]
+	mi := &file_ppp_v1_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -557,7 +933,7 @@ func (x *SyncBannedListRequest) String() string {
 func (*SyncBannedListRequest) ProtoMessage() {}
 
 func (x *SyncBannedListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[10]
+	mi := &file_ppp_v1_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -570,7 +946,7 @@ func (x *SyncBannedListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncBannedListRequest.ProtoReflect.Descriptor instead.
 func (*SyncBannedListRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SyncBannedListRequest) GetTreeId() string {
@@ -597,7 +973,7 @@ type SyncBannedListResponse struct {
 
 func (x *SyncBannedListResponse) Reset() {
 	*x = SyncBannedListResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[11]
+	mi := &file_ppp_v1_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -609,7 +985,7 @@ func (x *SyncBannedListResponse) String() string {
 func (*SyncBannedListResponse) ProtoMessage() {}
 
 func (x *SyncBannedListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[11]
+	mi := &file_ppp_v1_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -622,7 +998,7 @@ func (x *SyncBannedListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncBannedListResponse.ProtoReflect.Descriptor instead.
 func (*SyncBannedListResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SyncBannedListResponse) GetGeneration() int64 {
@@ -653,7 +1029,7 @@ type CreateJobRequest struct {
 
 func (x *CreateJobRequest) Reset() {
 	*x = CreateJobRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[12]
+	mi := &file_ppp_v1_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -665,7 +1041,7 @@ func (x *CreateJobRequest) String() string {
 func (*CreateJobRequest) ProtoMessage() {}
 
 func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[12]
+	mi := &file_ppp_v1_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -678,7 +1054,7 @@ func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobRequest.ProtoReflect.Descriptor instead.
 func (*CreateJobRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CreateJobRequest) GetTreeId() string {
@@ -732,7 +1108,7 @@ type CreateJobResponse struct {
 
 func (x *CreateJobResponse) Reset() {
 	*x = CreateJobResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[13]
+	mi := &file_ppp_v1_control_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +1120,7 @@ func (x *CreateJobResponse) String() string {
 func (*CreateJobResponse) ProtoMessage() {}
 
 func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[13]
+	mi := &file_ppp_v1_control_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,7 +1133,7 @@ func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobResponse.ProtoReflect.Descriptor instead.
 func (*CreateJobResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateJobResponse) GetJob() *Job {
@@ -769,14 +1145,14 @@ func (x *CreateJobResponse) GetJob() *Job {
 
 type QueryJobRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"` // center jobs only: "job:<uuid>"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *QueryJobRequest) Reset() {
 	*x = QueryJobRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[14]
+	mi := &file_ppp_v1_control_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +1164,7 @@ func (x *QueryJobRequest) String() string {
 func (*QueryJobRequest) ProtoMessage() {}
 
 func (x *QueryJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[14]
+	mi := &file_ppp_v1_control_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +1177,7 @@ func (x *QueryJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryJobRequest.ProtoReflect.Descriptor instead.
 func (*QueryJobRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{14}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *QueryJobRequest) GetJobId() string {
@@ -820,7 +1196,7 @@ type QueryJobResponse struct {
 
 func (x *QueryJobResponse) Reset() {
 	*x = QueryJobResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[15]
+	mi := &file_ppp_v1_control_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -832,7 +1208,7 @@ func (x *QueryJobResponse) String() string {
 func (*QueryJobResponse) ProtoMessage() {}
 
 func (x *QueryJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[15]
+	mi := &file_ppp_v1_control_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -845,7 +1221,7 @@ func (x *QueryJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryJobResponse.ProtoReflect.Descriptor instead.
 func (*QueryJobResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{15}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *QueryJobResponse) GetJob() *Job {
@@ -855,21 +1231,27 @@ func (x *QueryJobResponse) GetJob() *Job {
 	return nil
 }
 
+// job_id convention:
+//
+//	center-generated jobs: "job:<uuid>"
+//	local (scale-out back-to-source) jobs: "local:<uuid>" — nodes generate locally;
+//	the control plane accepts their progress without requiring a Job record.
+//
+// Cancellation key is (tree_id, filename), NOT job_id: banning a file
+// cancels every center job AND every local fetch for that file in the tree.
 type CancelJobRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// job_id may be center-generated; locally-initiated tasks may also cancel
-	// by (tree_id, filename).
-	JobId         string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	TreeId        string `protobuf:"bytes,2,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
-	Filename      string `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
-	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`    // optional; center job that triggered the cancel
+	TreeId        string                 `protobuf:"bytes,2,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"` // required when filename is set
+	Filename      string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`           // required when job_id is empty
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[16]
+	mi := &file_ppp_v1_control_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -881,7 +1263,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[16]
+	mi := &file_ppp_v1_control_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -894,7 +1276,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{16}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -928,13 +1310,15 @@ func (x *CancelJobRequest) GetReason() string {
 type CancelJobResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Canceled      bool                   `protobuf:"varint,1,opt,name=canceled,proto3" json:"canceled,omitempty"`
+	AlreadyBanned bool                   `protobuf:"varint,2,opt,name=already_banned,json=alreadyBanned,proto3" json:"already_banned,omitempty"` // file was already on the banned list
+	AffectedJobs  int32                  `protobuf:"varint,3,opt,name=affected_jobs,json=affectedJobs,proto3" json:"affected_jobs,omitempty"`    // center jobs for that file now canceled
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[17]
+	mi := &file_ppp_v1_control_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -946,7 +1330,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[17]
+	mi := &file_ppp_v1_control_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -959,7 +1343,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{17}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CancelJobResponse) GetCanceled() bool {
@@ -969,17 +1353,33 @@ func (x *CancelJobResponse) GetCanceled() bool {
 	return false
 }
 
+func (x *CancelJobResponse) GetAlreadyBanned() bool {
+	if x != nil {
+		return x.AlreadyBanned
+	}
+	return false
+}
+
+func (x *CancelJobResponse) GetAffectedJobs() int32 {
+	if x != nil {
+		return x.AffectedJobs
+	}
+	return 0
+}
+
 type ListJobsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
 	State         Job_JobState           `protobuf:"varint,2,opt,name=state,proto3,enum=ppp.v1.Job_JobState" json:"state,omitempty"`
+	PageSize      int32                  `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_ppp_v1_control_proto_msgTypes[18]
+	mi := &file_ppp_v1_control_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -991,7 +1391,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[18]
+	mi := &file_ppp_v1_control_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1004,7 +1404,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{18}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListJobsRequest) GetTreeId() string {
@@ -1021,16 +1421,31 @@ func (x *ListJobsRequest) GetState() Job_JobState {
 	return Job_JOB_STATE_UNSPECIFIED
 }
 
+func (x *ListJobsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListJobsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type ListJobsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Jobs          []*Job                 `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[19]
+	mi := &file_ppp_v1_control_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1042,7 +1457,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[19]
+	mi := &file_ppp_v1_control_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1055,7 +1470,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{19}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -1063,6 +1478,214 @@ func (x *ListJobsResponse) GetJobs() []*Job {
 		return x.Jobs
 	}
 	return nil
+}
+
+func (x *ListJobsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+type WatchJobsRequest struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	TreeId string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
+	// Replay jobs created after this timestamp (unix seconds) on subscribe.
+	SinceUnix     int64 `protobuf:"varint,2,opt,name=since_unix,json=sinceUnix,proto3" json:"since_unix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchJobsRequest) Reset() {
+	*x = WatchJobsRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchJobsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchJobsRequest) ProtoMessage() {}
+
+func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchJobsRequest.ProtoReflect.Descriptor instead.
+func (*WatchJobsRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *WatchJobsRequest) GetTreeId() string {
+	if x != nil {
+		return x.TreeId
+	}
+	return ""
+}
+
+func (x *WatchJobsRequest) GetSinceUnix() int64 {
+	if x != nil {
+		return x.SinceUnix
+	}
+	return 0
+}
+
+type JobUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Job           *Job                   `protobuf:"bytes,1,opt,name=job,proto3" json:"job,omitempty"`          // full job on create/update
+	Removed       bool                   `protobuf:"varint,2,opt,name=removed,proto3" json:"removed,omitempty"` // true when the job is no longer actionable
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobUpdate) Reset() {
+	*x = JobUpdate{}
+	mi := &file_ppp_v1_control_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JobUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JobUpdate) ProtoMessage() {}
+
+func (x *JobUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JobUpdate.ProtoReflect.Descriptor instead.
+func (*JobUpdate) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *JobUpdate) GetJob() *Job {
+	if x != nil {
+		return x.Job
+	}
+	return nil
+}
+
+func (x *JobUpdate) GetRemoved() bool {
+	if x != nil {
+		return x.Removed
+	}
+	return false
+}
+
+type UnbanRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
+	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnbanRequest) Reset() {
+	*x = UnbanRequest{}
+	mi := &file_ppp_v1_control_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnbanRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnbanRequest) ProtoMessage() {}
+
+func (x *UnbanRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnbanRequest.ProtoReflect.Descriptor instead.
+func (*UnbanRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *UnbanRequest) GetTreeId() string {
+	if x != nil {
+		return x.TreeId
+	}
+	return ""
+}
+
+func (x *UnbanRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+type UnbanResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Unbanned      bool                   `protobuf:"varint,1,opt,name=unbanned,proto3" json:"unbanned,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnbanResponse) Reset() {
+	*x = UnbanResponse{}
+	mi := &file_ppp_v1_control_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnbanResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnbanResponse) ProtoMessage() {}
+
+func (x *UnbanResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_control_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnbanResponse.ProtoReflect.Descriptor instead.
+func (*UnbanResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *UnbanResponse) GetUnbanned() bool {
+	if x != nil {
+		return x.Unbanned
+	}
+	return false
 }
 
 type ProgressRecord struct {
@@ -1075,7 +1698,7 @@ type ProgressRecord struct {
 
 func (x *ProgressRecord) Reset() {
 	*x = ProgressRecord{}
-	mi := &file_ppp_v1_control_proto_msgTypes[20]
+	mi := &file_ppp_v1_control_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1087,7 +1710,7 @@ func (x *ProgressRecord) String() string {
 func (*ProgressRecord) ProtoMessage() {}
 
 func (x *ProgressRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[20]
+	mi := &file_ppp_v1_control_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1100,7 +1723,7 @@ func (x *ProgressRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProgressRecord.ProtoReflect.Descriptor instead.
 func (*ProgressRecord) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{20}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ProgressRecord) GetState() *ProgressState {
@@ -1126,7 +1749,7 @@ type SyncProgressResponse struct {
 
 func (x *SyncProgressResponse) Reset() {
 	*x = SyncProgressResponse{}
-	mi := &file_ppp_v1_control_proto_msgTypes[21]
+	mi := &file_ppp_v1_control_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1138,7 +1761,7 @@ func (x *SyncProgressResponse) String() string {
 func (*SyncProgressResponse) ProtoMessage() {}
 
 func (x *SyncProgressResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_control_proto_msgTypes[21]
+	mi := &file_ppp_v1_control_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1151,7 +1774,7 @@ func (x *SyncProgressResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncProgressResponse.ProtoReflect.Descriptor instead.
 func (*SyncProgressResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_control_proto_rawDescGZIP(), []int{21}
+	return file_ppp_v1_control_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SyncProgressResponse) GetOk() bool {
@@ -1165,7 +1788,22 @@ var File_ppp_v1_control_proto protoreflect.FileDescriptor
 
 const file_ppp_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x14ppp/v1/control.proto\x12\x06ppp.v1\x1a\x13ppp/v1/common.proto\"7\n" +
+	"\x14ppp/v1/control.proto\x12\x06ppp.v1\x1a\x13ppp/v1/common.proto\"5\n" +
+	"\x11CreateTreeRequest\x12 \n" +
+	"\x04tree\x18\x01 \x01(\v2\f.ppp.v1.TreeR\x04tree\"6\n" +
+	"\x12CreateTreeResponse\x12 \n" +
+	"\x04tree\x18\x01 \x01(\v2\f.ppp.v1.TreeR\x04tree\")\n" +
+	"\x0eGetTreeRequest\x12\x17\n" +
+	"\atree_id\x18\x01 \x01(\tR\x06treeId\"3\n" +
+	"\x0fGetTreeResponse\x12 \n" +
+	"\x04tree\x18\x01 \x01(\v2\f.ppp.v1.TreeR\x04tree\"\x12\n" +
+	"\x10ListTreesRequest\"7\n" +
+	"\x11ListTreesResponse\x12\"\n" +
+	"\x05trees\x18\x01 \x03(\v2\f.ppp.v1.TreeR\x05trees\",\n" +
+	"\x11DeleteTreeRequest\x12\x17\n" +
+	"\atree_id\x18\x01 \x01(\tR\x06treeId\".\n" +
+	"\x12DeleteTreeResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"7\n" +
 	"\x13RegisterNodeRequest\x12 \n" +
 	"\x04node\x18\x01 \x01(\v2\f.ppp.v1.NodeR\x04node\"\x92\x01\n" +
 	"\x14RegisterNodeResponse\x12 \n" +
@@ -1193,17 +1831,21 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"\x0enode_upstreams\x18\x03 \x03(\v2#.ppp.v1.Topology.NodeUpstreamsEntryR\rnodeUpstreams\x1aV\n" +
 	"\x12NodeUpstreamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
-	"\x05value\x18\x02 \x01(\v2\x14.ppp.v1.NodeUpstreamR\x05value:\x028\x01\"$\n" +
+	"\x05value\x18\x02 \x01(\v2\x14.ppp.v1.NodeUpstreamR\x05value:\x028\x01\"N\n" +
 	"\fNodeUpstream\x12\x14\n" +
-	"\x05addrs\x18\x01 \x03(\tR\x05addrs\"Z\n" +
+	"\x05addrs\x18\x01 \x03(\tR\x05addrs\x12(\n" +
+	"\x10pull_from_source\x18\x02 \x01(\bR\x0epullFromSource\"Z\n" +
 	"\x16WatchBannedListRequest\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12'\n" +
-	"\x0ffrom_generation\x18\x02 \x01(\x03R\x0efromGeneration\"\\\n" +
+	"\x0ffrom_generation\x18\x02 \x01(\x03R\x0efromGeneration\"\xdc\x01\n" +
 	"\x10BannedListUpdate\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x03R\n" +
 	"generation\x12(\n" +
-	"\x05added\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x05added\"Y\n" +
+	"\x05added\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x05added\x12#\n" +
+	"\rfull_snapshot\x18\x03 \x01(\bR\ffullSnapshot\x12.\n" +
+	"\bsnapshot\x18\x04 \x03(\v2\x12.ppp.v1.BannedFileR\bsnapshot\x12)\n" +
+	"\aremoved\x18\x05 \x03(\v2\x0f.ppp.v1.TreeKeyR\aremoved\"Y\n" +
 	"\x15SyncBannedListRequest\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12'\n" +
 	"\x0ffrom_generation\x18\x02 \x01(\x03R\x0efromGeneration\"d\n" +
@@ -1229,20 +1871,44 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atree_id\x18\x02 \x01(\tR\x06treeId\x12\x1a\n" +
 	"\bfilename\x18\x03 \x01(\tR\bfilename\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"/\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"{\n" +
 	"\x11CancelJobResponse\x12\x1a\n" +
-	"\bcanceled\x18\x01 \x01(\bR\bcanceled\"V\n" +
+	"\bcanceled\x18\x01 \x01(\bR\bcanceled\x12%\n" +
+	"\x0ealready_banned\x18\x02 \x01(\bR\ralreadyBanned\x12#\n" +
+	"\raffected_jobs\x18\x03 \x01(\x05R\faffectedJobs\"\x92\x01\n" +
 	"\x0fListJobsRequest\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12*\n" +
-	"\x05state\x18\x02 \x01(\x0e2\x14.ppp.v1.Job.JobStateR\x05state\"3\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x14.ppp.v1.Job.JobStateR\x05state\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"[\n" +
 	"\x10ListJobsResponse\x12\x1f\n" +
-	"\x04jobs\x18\x01 \x03(\v2\v.ppp.v1.JobR\x04jobs\"V\n" +
+	"\x04jobs\x18\x01 \x03(\v2\v.ppp.v1.JobR\x04jobs\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"J\n" +
+	"\x10WatchJobsRequest\x12\x17\n" +
+	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12\x1d\n" +
+	"\n" +
+	"since_unix\x18\x02 \x01(\x03R\tsinceUnix\"D\n" +
+	"\tJobUpdate\x12\x1d\n" +
+	"\x03job\x18\x01 \x01(\v2\v.ppp.v1.JobR\x03job\x12\x18\n" +
+	"\aremoved\x18\x02 \x01(\bR\aremoved\"C\n" +
+	"\fUnbanRequest\x12\x17\n" +
+	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12\x1a\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\"+\n" +
+	"\rUnbanResponse\x12\x1a\n" +
+	"\bunbanned\x18\x01 \x01(\bR\bunbanned\"V\n" +
 	"\x0eProgressRecord\x12+\n" +
 	"\x05state\x18\x01 \x01(\v2\x15.ppp.v1.ProgressStateR\x05state\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\"&\n" +
 	"\x14SyncProgressResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xc9\x05\n" +
-	"\aControl\x12I\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xc3\b\n" +
+	"\aControl\x12C\n" +
+	"\n" +
+	"CreateTree\x12\x19.ppp.v1.CreateTreeRequest\x1a\x1a.ppp.v1.CreateTreeResponse\x12:\n" +
+	"\aGetTree\x12\x16.ppp.v1.GetTreeRequest\x1a\x17.ppp.v1.GetTreeResponse\x12@\n" +
+	"\tListTrees\x12\x18.ppp.v1.ListTreesRequest\x1a\x19.ppp.v1.ListTreesResponse\x12C\n" +
+	"\n" +
+	"DeleteTree\x12\x19.ppp.v1.DeleteTreeRequest\x1a\x1a.ppp.v1.DeleteTreeResponse\x12I\n" +
 	"\fRegisterNode\x12\x1b.ppp.v1.RegisterNodeRequest\x1a\x1c.ppp.v1.RegisterNodeResponse\x12@\n" +
 	"\tHeartbeat\x12\x18.ppp.v1.HeartbeatRequest\x1a\x19.ppp.v1.HeartbeatResponse\x12G\n" +
 	"\rWatchTopology\x12\x1c.ppp.v1.WatchTopologyRequest\x1a\x16.ppp.v1.TopologyUpdate0\x01\x12M\n" +
@@ -1251,7 +1917,9 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"\tCreateJob\x12\x18.ppp.v1.CreateJobRequest\x1a\x19.ppp.v1.CreateJobResponse\x12=\n" +
 	"\bQueryJob\x12\x17.ppp.v1.QueryJobRequest\x1a\x18.ppp.v1.QueryJobResponse\x12@\n" +
 	"\tCancelJob\x12\x18.ppp.v1.CancelJobRequest\x1a\x19.ppp.v1.CancelJobResponse\x12=\n" +
-	"\bListJobs\x12\x17.ppp.v1.ListJobsRequest\x1a\x18.ppp.v1.ListJobsResponse\x12F\n" +
+	"\bListJobs\x12\x17.ppp.v1.ListJobsRequest\x1a\x18.ppp.v1.ListJobsResponse\x12:\n" +
+	"\tWatchJobs\x12\x18.ppp.v1.WatchJobsRequest\x1a\x11.ppp.v1.JobUpdate0\x01\x124\n" +
+	"\x05Unban\x12\x14.ppp.v1.UnbanRequest\x1a\x15.ppp.v1.UnbanResponse\x12F\n" +
 	"\fSyncProgress\x12\x16.ppp.v1.ProgressRecord\x1a\x1c.ppp.v1.SyncProgressResponse(\x01B&Z$github.com/akzj/ppp/gen/ppp/v1;pppv1b\x06proto3"
 
 var (
@@ -1266,81 +1934,113 @@ func file_ppp_v1_control_proto_rawDescGZIP() []byte {
 	return file_ppp_v1_control_proto_rawDescData
 }
 
-var file_ppp_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_ppp_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_ppp_v1_control_proto_goTypes = []any{
-	(*RegisterNodeRequest)(nil),    // 0: ppp.v1.RegisterNodeRequest
-	(*RegisterNodeResponse)(nil),   // 1: ppp.v1.RegisterNodeResponse
-	(*HeartbeatRequest)(nil),       // 2: ppp.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 3: ppp.v1.HeartbeatResponse
-	(*WatchTopologyRequest)(nil),   // 4: ppp.v1.WatchTopologyRequest
-	(*TopologyUpdate)(nil),         // 5: ppp.v1.TopologyUpdate
-	(*Topology)(nil),               // 6: ppp.v1.Topology
-	(*NodeUpstream)(nil),           // 7: ppp.v1.NodeUpstream
-	(*WatchBannedListRequest)(nil), // 8: ppp.v1.WatchBannedListRequest
-	(*BannedListUpdate)(nil),       // 9: ppp.v1.BannedListUpdate
-	(*SyncBannedListRequest)(nil),  // 10: ppp.v1.SyncBannedListRequest
-	(*SyncBannedListResponse)(nil), // 11: ppp.v1.SyncBannedListResponse
-	(*CreateJobRequest)(nil),       // 12: ppp.v1.CreateJobRequest
-	(*CreateJobResponse)(nil),      // 13: ppp.v1.CreateJobResponse
-	(*QueryJobRequest)(nil),        // 14: ppp.v1.QueryJobRequest
-	(*QueryJobResponse)(nil),       // 15: ppp.v1.QueryJobResponse
-	(*CancelJobRequest)(nil),       // 16: ppp.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),      // 17: ppp.v1.CancelJobResponse
-	(*ListJobsRequest)(nil),        // 18: ppp.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),       // 19: ppp.v1.ListJobsResponse
-	(*ProgressRecord)(nil),         // 20: ppp.v1.ProgressRecord
-	(*SyncProgressResponse)(nil),   // 21: ppp.v1.SyncProgressResponse
-	nil,                            // 22: ppp.v1.Topology.NodeUpstreamsEntry
-	(*Node)(nil),                   // 23: ppp.v1.Node
-	(*Tree)(nil),                   // 24: ppp.v1.Tree
-	(*BannedFile)(nil),             // 25: ppp.v1.BannedFile
-	(*Source)(nil),                 // 26: ppp.v1.Source
-	(*Job)(nil),                    // 27: ppp.v1.Job
-	(Job_JobState)(0),              // 28: ppp.v1.Job.JobState
-	(*ProgressState)(nil),          // 29: ppp.v1.ProgressState
+	(*CreateTreeRequest)(nil),      // 0: ppp.v1.CreateTreeRequest
+	(*CreateTreeResponse)(nil),     // 1: ppp.v1.CreateTreeResponse
+	(*GetTreeRequest)(nil),         // 2: ppp.v1.GetTreeRequest
+	(*GetTreeResponse)(nil),        // 3: ppp.v1.GetTreeResponse
+	(*ListTreesRequest)(nil),       // 4: ppp.v1.ListTreesRequest
+	(*ListTreesResponse)(nil),      // 5: ppp.v1.ListTreesResponse
+	(*DeleteTreeRequest)(nil),      // 6: ppp.v1.DeleteTreeRequest
+	(*DeleteTreeResponse)(nil),     // 7: ppp.v1.DeleteTreeResponse
+	(*RegisterNodeRequest)(nil),    // 8: ppp.v1.RegisterNodeRequest
+	(*RegisterNodeResponse)(nil),   // 9: ppp.v1.RegisterNodeResponse
+	(*HeartbeatRequest)(nil),       // 10: ppp.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 11: ppp.v1.HeartbeatResponse
+	(*WatchTopologyRequest)(nil),   // 12: ppp.v1.WatchTopologyRequest
+	(*TopologyUpdate)(nil),         // 13: ppp.v1.TopologyUpdate
+	(*Topology)(nil),               // 14: ppp.v1.Topology
+	(*NodeUpstream)(nil),           // 15: ppp.v1.NodeUpstream
+	(*WatchBannedListRequest)(nil), // 16: ppp.v1.WatchBannedListRequest
+	(*BannedListUpdate)(nil),       // 17: ppp.v1.BannedListUpdate
+	(*SyncBannedListRequest)(nil),  // 18: ppp.v1.SyncBannedListRequest
+	(*SyncBannedListResponse)(nil), // 19: ppp.v1.SyncBannedListResponse
+	(*CreateJobRequest)(nil),       // 20: ppp.v1.CreateJobRequest
+	(*CreateJobResponse)(nil),      // 21: ppp.v1.CreateJobResponse
+	(*QueryJobRequest)(nil),        // 22: ppp.v1.QueryJobRequest
+	(*QueryJobResponse)(nil),       // 23: ppp.v1.QueryJobResponse
+	(*CancelJobRequest)(nil),       // 24: ppp.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),      // 25: ppp.v1.CancelJobResponse
+	(*ListJobsRequest)(nil),        // 26: ppp.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),       // 27: ppp.v1.ListJobsResponse
+	(*WatchJobsRequest)(nil),       // 28: ppp.v1.WatchJobsRequest
+	(*JobUpdate)(nil),              // 29: ppp.v1.JobUpdate
+	(*UnbanRequest)(nil),           // 30: ppp.v1.UnbanRequest
+	(*UnbanResponse)(nil),          // 31: ppp.v1.UnbanResponse
+	(*ProgressRecord)(nil),         // 32: ppp.v1.ProgressRecord
+	(*SyncProgressResponse)(nil),   // 33: ppp.v1.SyncProgressResponse
+	nil,                            // 34: ppp.v1.Topology.NodeUpstreamsEntry
+	(*Tree)(nil),                   // 35: ppp.v1.Tree
+	(*Node)(nil),                   // 36: ppp.v1.Node
+	(*BannedFile)(nil),             // 37: ppp.v1.BannedFile
+	(*TreeKey)(nil),                // 38: ppp.v1.TreeKey
+	(*Source)(nil),                 // 39: ppp.v1.Source
+	(*Job)(nil),                    // 40: ppp.v1.Job
+	(Job_JobState)(0),              // 41: ppp.v1.Job.JobState
+	(*ProgressState)(nil),          // 42: ppp.v1.ProgressState
 }
 var file_ppp_v1_control_proto_depIdxs = []int32{
-	23, // 0: ppp.v1.RegisterNodeRequest.node:type_name -> ppp.v1.Node
-	24, // 1: ppp.v1.RegisterNodeResponse.tree:type_name -> ppp.v1.Tree
-	6,  // 2: ppp.v1.RegisterNodeResponse.topology:type_name -> ppp.v1.Topology
-	25, // 3: ppp.v1.RegisterNodeResponse.banned:type_name -> ppp.v1.BannedFile
-	23, // 4: ppp.v1.HeartbeatRequest.node:type_name -> ppp.v1.Node
-	6,  // 5: ppp.v1.TopologyUpdate.topology:type_name -> ppp.v1.Topology
-	22, // 6: ppp.v1.Topology.node_upstreams:type_name -> ppp.v1.Topology.NodeUpstreamsEntry
-	25, // 7: ppp.v1.BannedListUpdate.added:type_name -> ppp.v1.BannedFile
-	25, // 8: ppp.v1.SyncBannedListResponse.banned:type_name -> ppp.v1.BannedFile
-	26, // 9: ppp.v1.CreateJobRequest.source:type_name -> ppp.v1.Source
-	27, // 10: ppp.v1.CreateJobResponse.job:type_name -> ppp.v1.Job
-	27, // 11: ppp.v1.QueryJobResponse.job:type_name -> ppp.v1.Job
-	28, // 12: ppp.v1.ListJobsRequest.state:type_name -> ppp.v1.Job.JobState
-	27, // 13: ppp.v1.ListJobsResponse.jobs:type_name -> ppp.v1.Job
-	29, // 14: ppp.v1.ProgressRecord.state:type_name -> ppp.v1.ProgressState
-	7,  // 15: ppp.v1.Topology.NodeUpstreamsEntry.value:type_name -> ppp.v1.NodeUpstream
-	0,  // 16: ppp.v1.Control.RegisterNode:input_type -> ppp.v1.RegisterNodeRequest
-	2,  // 17: ppp.v1.Control.Heartbeat:input_type -> ppp.v1.HeartbeatRequest
-	4,  // 18: ppp.v1.Control.WatchTopology:input_type -> ppp.v1.WatchTopologyRequest
-	8,  // 19: ppp.v1.Control.WatchBannedList:input_type -> ppp.v1.WatchBannedListRequest
-	10, // 20: ppp.v1.Control.SyncBannedList:input_type -> ppp.v1.SyncBannedListRequest
-	12, // 21: ppp.v1.Control.CreateJob:input_type -> ppp.v1.CreateJobRequest
-	14, // 22: ppp.v1.Control.QueryJob:input_type -> ppp.v1.QueryJobRequest
-	16, // 23: ppp.v1.Control.CancelJob:input_type -> ppp.v1.CancelJobRequest
-	18, // 24: ppp.v1.Control.ListJobs:input_type -> ppp.v1.ListJobsRequest
-	20, // 25: ppp.v1.Control.SyncProgress:input_type -> ppp.v1.ProgressRecord
-	1,  // 26: ppp.v1.Control.RegisterNode:output_type -> ppp.v1.RegisterNodeResponse
-	3,  // 27: ppp.v1.Control.Heartbeat:output_type -> ppp.v1.HeartbeatResponse
-	5,  // 28: ppp.v1.Control.WatchTopology:output_type -> ppp.v1.TopologyUpdate
-	9,  // 29: ppp.v1.Control.WatchBannedList:output_type -> ppp.v1.BannedListUpdate
-	11, // 30: ppp.v1.Control.SyncBannedList:output_type -> ppp.v1.SyncBannedListResponse
-	13, // 31: ppp.v1.Control.CreateJob:output_type -> ppp.v1.CreateJobResponse
-	15, // 32: ppp.v1.Control.QueryJob:output_type -> ppp.v1.QueryJobResponse
-	17, // 33: ppp.v1.Control.CancelJob:output_type -> ppp.v1.CancelJobResponse
-	19, // 34: ppp.v1.Control.ListJobs:output_type -> ppp.v1.ListJobsResponse
-	21, // 35: ppp.v1.Control.SyncProgress:output_type -> ppp.v1.SyncProgressResponse
-	26, // [26:36] is the sub-list for method output_type
-	16, // [16:26] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	35, // 0: ppp.v1.CreateTreeRequest.tree:type_name -> ppp.v1.Tree
+	35, // 1: ppp.v1.CreateTreeResponse.tree:type_name -> ppp.v1.Tree
+	35, // 2: ppp.v1.GetTreeResponse.tree:type_name -> ppp.v1.Tree
+	35, // 3: ppp.v1.ListTreesResponse.trees:type_name -> ppp.v1.Tree
+	36, // 4: ppp.v1.RegisterNodeRequest.node:type_name -> ppp.v1.Node
+	35, // 5: ppp.v1.RegisterNodeResponse.tree:type_name -> ppp.v1.Tree
+	14, // 6: ppp.v1.RegisterNodeResponse.topology:type_name -> ppp.v1.Topology
+	37, // 7: ppp.v1.RegisterNodeResponse.banned:type_name -> ppp.v1.BannedFile
+	36, // 8: ppp.v1.HeartbeatRequest.node:type_name -> ppp.v1.Node
+	14, // 9: ppp.v1.TopologyUpdate.topology:type_name -> ppp.v1.Topology
+	34, // 10: ppp.v1.Topology.node_upstreams:type_name -> ppp.v1.Topology.NodeUpstreamsEntry
+	37, // 11: ppp.v1.BannedListUpdate.added:type_name -> ppp.v1.BannedFile
+	37, // 12: ppp.v1.BannedListUpdate.snapshot:type_name -> ppp.v1.BannedFile
+	38, // 13: ppp.v1.BannedListUpdate.removed:type_name -> ppp.v1.TreeKey
+	37, // 14: ppp.v1.SyncBannedListResponse.banned:type_name -> ppp.v1.BannedFile
+	39, // 15: ppp.v1.CreateJobRequest.source:type_name -> ppp.v1.Source
+	40, // 16: ppp.v1.CreateJobResponse.job:type_name -> ppp.v1.Job
+	40, // 17: ppp.v1.QueryJobResponse.job:type_name -> ppp.v1.Job
+	41, // 18: ppp.v1.ListJobsRequest.state:type_name -> ppp.v1.Job.JobState
+	40, // 19: ppp.v1.ListJobsResponse.jobs:type_name -> ppp.v1.Job
+	40, // 20: ppp.v1.JobUpdate.job:type_name -> ppp.v1.Job
+	42, // 21: ppp.v1.ProgressRecord.state:type_name -> ppp.v1.ProgressState
+	15, // 22: ppp.v1.Topology.NodeUpstreamsEntry.value:type_name -> ppp.v1.NodeUpstream
+	0,  // 23: ppp.v1.Control.CreateTree:input_type -> ppp.v1.CreateTreeRequest
+	2,  // 24: ppp.v1.Control.GetTree:input_type -> ppp.v1.GetTreeRequest
+	4,  // 25: ppp.v1.Control.ListTrees:input_type -> ppp.v1.ListTreesRequest
+	6,  // 26: ppp.v1.Control.DeleteTree:input_type -> ppp.v1.DeleteTreeRequest
+	8,  // 27: ppp.v1.Control.RegisterNode:input_type -> ppp.v1.RegisterNodeRequest
+	10, // 28: ppp.v1.Control.Heartbeat:input_type -> ppp.v1.HeartbeatRequest
+	12, // 29: ppp.v1.Control.WatchTopology:input_type -> ppp.v1.WatchTopologyRequest
+	16, // 30: ppp.v1.Control.WatchBannedList:input_type -> ppp.v1.WatchBannedListRequest
+	18, // 31: ppp.v1.Control.SyncBannedList:input_type -> ppp.v1.SyncBannedListRequest
+	20, // 32: ppp.v1.Control.CreateJob:input_type -> ppp.v1.CreateJobRequest
+	22, // 33: ppp.v1.Control.QueryJob:input_type -> ppp.v1.QueryJobRequest
+	24, // 34: ppp.v1.Control.CancelJob:input_type -> ppp.v1.CancelJobRequest
+	26, // 35: ppp.v1.Control.ListJobs:input_type -> ppp.v1.ListJobsRequest
+	28, // 36: ppp.v1.Control.WatchJobs:input_type -> ppp.v1.WatchJobsRequest
+	30, // 37: ppp.v1.Control.Unban:input_type -> ppp.v1.UnbanRequest
+	32, // 38: ppp.v1.Control.SyncProgress:input_type -> ppp.v1.ProgressRecord
+	1,  // 39: ppp.v1.Control.CreateTree:output_type -> ppp.v1.CreateTreeResponse
+	3,  // 40: ppp.v1.Control.GetTree:output_type -> ppp.v1.GetTreeResponse
+	5,  // 41: ppp.v1.Control.ListTrees:output_type -> ppp.v1.ListTreesResponse
+	7,  // 42: ppp.v1.Control.DeleteTree:output_type -> ppp.v1.DeleteTreeResponse
+	9,  // 43: ppp.v1.Control.RegisterNode:output_type -> ppp.v1.RegisterNodeResponse
+	11, // 44: ppp.v1.Control.Heartbeat:output_type -> ppp.v1.HeartbeatResponse
+	13, // 45: ppp.v1.Control.WatchTopology:output_type -> ppp.v1.TopologyUpdate
+	17, // 46: ppp.v1.Control.WatchBannedList:output_type -> ppp.v1.BannedListUpdate
+	19, // 47: ppp.v1.Control.SyncBannedList:output_type -> ppp.v1.SyncBannedListResponse
+	21, // 48: ppp.v1.Control.CreateJob:output_type -> ppp.v1.CreateJobResponse
+	23, // 49: ppp.v1.Control.QueryJob:output_type -> ppp.v1.QueryJobResponse
+	25, // 50: ppp.v1.Control.CancelJob:output_type -> ppp.v1.CancelJobResponse
+	27, // 51: ppp.v1.Control.ListJobs:output_type -> ppp.v1.ListJobsResponse
+	29, // 52: ppp.v1.Control.WatchJobs:output_type -> ppp.v1.JobUpdate
+	31, // 53: ppp.v1.Control.Unban:output_type -> ppp.v1.UnbanResponse
+	33, // 54: ppp.v1.Control.SyncProgress:output_type -> ppp.v1.SyncProgressResponse
+	39, // [39:55] is the sub-list for method output_type
+	23, // [23:39] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_ppp_v1_control_proto_init() }
@@ -1355,7 +2055,7 @@ func file_ppp_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ppp_v1_control_proto_rawDesc), len(file_ppp_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

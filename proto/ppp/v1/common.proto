@@ -13,8 +13,8 @@ message Tree {
   string app = 2;
   string environment = 3; // dev|beta|pre|prod
   string idc = 4;
-  string cluster = 5;
-  int32 root_count = 6;   // number of root nodes, 1-3 (configurable)
+  string cluster = 5;     // optional deployment metadata; NOT part of tree identity
+  int32 root_count = 6;   // number of root nodes, 1-3 (configurable; enforced by ctl)
   int32 group_members = 7; // nodes per group (non-root layers)
   int32 group_children = 8; // child groups per group
   Source source = 9;      // source: OSS/S3/HTTP/HTTPS (roots pull from source)

@@ -19,6 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Control_CreateTree_FullMethodName      = "/ppp.v1.Control/CreateTree"
+	Control_GetTree_FullMethodName         = "/ppp.v1.Control/GetTree"
+	Control_ListTrees_FullMethodName       = "/ppp.v1.Control/ListTrees"
+	Control_DeleteTree_FullMethodName      = "/ppp.v1.Control/DeleteTree"
 	Control_RegisterNode_FullMethodName    = "/ppp.v1.Control/RegisterNode"
 	Control_Heartbeat_FullMethodName       = "/ppp.v1.Control/Heartbeat"
 	Control_WatchTopology_FullMethodName   = "/ppp.v1.Control/WatchTopology"
@@ -28,6 +32,8 @@ const (
 	Control_QueryJob_FullMethodName        = "/ppp.v1.Control/QueryJob"
 	Control_CancelJob_FullMethodName       = "/ppp.v1.Control/CancelJob"
 	Control_ListJobs_FullMethodName        = "/ppp.v1.Control/ListJobs"
+	Control_WatchJobs_FullMethodName       = "/ppp.v1.Control/WatchJobs"
+	Control_Unban_FullMethodName           = "/ppp.v1.Control/Unban"
 	Control_SyncProgress_FullMethodName    = "/ppp.v1.Control/SyncProgress"
 )
 
@@ -39,6 +45,11 @@ const (
 // - Nodes register/heartbeat and sync topology and the banned list here.
 // - Orchestration systems create/query/cancel distribution jobs here.
 type ControlClient interface {
+	// ===== Tree lifecycle =====
+	CreateTree(ctx context.Context, in *CreateTreeRequest, opts ...grpc.CallOption) (*CreateTreeResponse, error)
+	GetTree(ctx context.Context, in *GetTreeRequest, opts ...grpc.CallOption) (*GetTreeResponse, error)
+	ListTrees(ctx context.Context, in *ListTreesRequest, opts ...grpc.CallOption) (*ListTreesResponse, error)
+	DeleteTree(ctx context.Context, in *DeleteTreeRequest, opts ...grpc.CallOption) (*DeleteTreeResponse, error)
 	// ===== Node onboarding =====
 	RegisterNode(ctx context.Context, in *RegisterNodeRequest, opts ...grpc.CallOption) (*RegisterNodeResponse, error)
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
@@ -53,6 +64,11 @@ type ControlClient interface {
 	QueryJob(ctx context.Context, in *QueryJobRequest, opts ...grpc.CallOption) (*QueryJobResponse, error)
 	CancelJob(ctx context.Context, in *CancelJobRequest, opts ...grpc.CallOption) (*CancelJobResponse, error)
 	ListJobs(ctx context.Context, in *ListJobsRequest, opts ...grpc.CallOption) (*ListJobsResponse, error)
+	// WatchJobs pushes new/updated job assignments to root nodes of a tree.
+	// Root nodes subscribe and start pulling the file from Source on receipt.
+	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobUpdate], error)
+	// Unban removes a file from the banned list (undo a wrong cancel).
+	Unban(ctx context.Context, in *UnbanRequest, opts ...grpc.CallOption) (*UnbanResponse, error)
 	// Node progress reporting
 	SyncProgress(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ProgressRecord, SyncProgressResponse], error)
 }
@@ -63,6 +79,46 @@ type controlClient struct {
 
 func NewControlClient(cc grpc.ClientConnInterface) ControlClient {
 	return &controlClient{cc}
+}
+
+func (c *controlClient) CreateTree(ctx context.Context, in *CreateTreeRequest, opts ...grpc.CallOption) (*CreateTreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTreeResponse)
+	err := c.cc.Invoke(ctx, Control_CreateTree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetTree(ctx context.Context, in *GetTreeRequest, opts ...grpc.CallOption) (*GetTreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTreeResponse)
+	err := c.cc.Invoke(ctx, Control_GetTree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListTrees(ctx context.Context, in *ListTreesRequest, opts ...grpc.CallOption) (*ListTreesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTreesResponse)
+	err := c.cc.Invoke(ctx, Control_ListTrees_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteTree(ctx context.Context, in *DeleteTreeRequest, opts ...grpc.CallOption) (*DeleteTreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteTreeResponse)
+	err := c.cc.Invoke(ctx, Control_DeleteTree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *controlClient) RegisterNode(ctx context.Context, in *RegisterNodeRequest, opts ...grpc.CallOption) (*RegisterNodeResponse, error) {
@@ -173,9 +229,38 @@ func (c *controlClient) ListJobs(ctx context.Context, in *ListJobsRequest, opts 
 	return out, nil
 }
 
+func (c *controlClient) WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Control_ServiceDesc.Streams[2], Control_WatchJobs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchJobsRequest, JobUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchJobsClient = grpc.ServerStreamingClient[JobUpdate]
+
+func (c *controlClient) Unban(ctx context.Context, in *UnbanRequest, opts ...grpc.CallOption) (*UnbanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnbanResponse)
+	err := c.cc.Invoke(ctx, Control_Unban_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) SyncProgress(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ProgressRecord, SyncProgressResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Control_ServiceDesc.Streams[2], Control_SyncProgress_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Control_ServiceDesc.Streams[3], Control_SyncProgress_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +279,11 @@ type Control_SyncProgressClient = grpc.ClientStreamingClient[ProgressRecord, Syn
 // - Nodes register/heartbeat and sync topology and the banned list here.
 // - Orchestration systems create/query/cancel distribution jobs here.
 type ControlServer interface {
+	// ===== Tree lifecycle =====
+	CreateTree(context.Context, *CreateTreeRequest) (*CreateTreeResponse, error)
+	GetTree(context.Context, *GetTreeRequest) (*GetTreeResponse, error)
+	ListTrees(context.Context, *ListTreesRequest) (*ListTreesResponse, error)
+	DeleteTree(context.Context, *DeleteTreeRequest) (*DeleteTreeResponse, error)
 	// ===== Node onboarding =====
 	RegisterNode(context.Context, *RegisterNodeRequest) (*RegisterNodeResponse, error)
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
@@ -208,6 +298,11 @@ type ControlServer interface {
 	QueryJob(context.Context, *QueryJobRequest) (*QueryJobResponse, error)
 	CancelJob(context.Context, *CancelJobRequest) (*CancelJobResponse, error)
 	ListJobs(context.Context, *ListJobsRequest) (*ListJobsResponse, error)
+	// WatchJobs pushes new/updated job assignments to root nodes of a tree.
+	// Root nodes subscribe and start pulling the file from Source on receipt.
+	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[JobUpdate]) error
+	// Unban removes a file from the banned list (undo a wrong cancel).
+	Unban(context.Context, *UnbanRequest) (*UnbanResponse, error)
 	// Node progress reporting
 	SyncProgress(grpc.ClientStreamingServer[ProgressRecord, SyncProgressResponse]) error
 	mustEmbedUnimplementedControlServer()
@@ -220,6 +315,18 @@ type ControlServer interface {
 // pointer dereference when methods are called.
 type UnimplementedControlServer struct{}
 
+func (UnimplementedControlServer) CreateTree(context.Context, *CreateTreeRequest) (*CreateTreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateTree not implemented")
+}
+func (UnimplementedControlServer) GetTree(context.Context, *GetTreeRequest) (*GetTreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTree not implemented")
+}
+func (UnimplementedControlServer) ListTrees(context.Context, *ListTreesRequest) (*ListTreesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTrees not implemented")
+}
+func (UnimplementedControlServer) DeleteTree(context.Context, *DeleteTreeRequest) (*DeleteTreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTree not implemented")
+}
 func (UnimplementedControlServer) RegisterNode(context.Context, *RegisterNodeRequest) (*RegisterNodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterNode not implemented")
 }
@@ -247,6 +354,12 @@ func (UnimplementedControlServer) CancelJob(context.Context, *CancelJobRequest) 
 func (UnimplementedControlServer) ListJobs(context.Context, *ListJobsRequest) (*ListJobsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListJobs not implemented")
 }
+func (UnimplementedControlServer) WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[JobUpdate]) error {
+	return status.Error(codes.Unimplemented, "method WatchJobs not implemented")
+}
+func (UnimplementedControlServer) Unban(context.Context, *UnbanRequest) (*UnbanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Unban not implemented")
+}
 func (UnimplementedControlServer) SyncProgress(grpc.ClientStreamingServer[ProgressRecord, SyncProgressResponse]) error {
 	return status.Error(codes.Unimplemented, "method SyncProgress not implemented")
 }
@@ -269,6 +382,78 @@ func RegisterControlServer(s grpc.ServiceRegistrar, srv ControlServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&Control_ServiceDesc, srv)
+}
+
+func _Control_CreateTree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateTree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateTree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateTree(ctx, req.(*CreateTreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetTree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetTree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetTree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetTree(ctx, req.(*GetTreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListTrees_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTreesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListTrees(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListTrees_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListTrees(ctx, req.(*ListTreesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteTree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteTree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteTree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteTree(ctx, req.(*DeleteTreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Control_RegisterNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -419,6 +604,35 @@ func _Control_ListJobs_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_WatchJobs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchJobsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControlServer).WatchJobs(m, &grpc.GenericServerStream[WatchJobsRequest, JobUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchJobsServer = grpc.ServerStreamingServer[JobUpdate]
+
+func _Control_Unban_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnbanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).Unban(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_Unban_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).Unban(ctx, req.(*UnbanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_SyncProgress_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(ControlServer).SyncProgress(&grpc.GenericServerStream[ProgressRecord, SyncProgressResponse]{ServerStream: stream})
 }
@@ -433,6 +647,22 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "ppp.v1.Control",
 	HandlerType: (*ControlServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateTree",
+			Handler:    _Control_CreateTree_Handler,
+		},
+		{
+			MethodName: "GetTree",
+			Handler:    _Control_GetTree_Handler,
+		},
+		{
+			MethodName: "ListTrees",
+			Handler:    _Control_ListTrees_Handler,
+		},
+		{
+			MethodName: "DeleteTree",
+			Handler:    _Control_DeleteTree_Handler,
+		},
 		{
 			MethodName: "RegisterNode",
 			Handler:    _Control_RegisterNode_Handler,
@@ -461,6 +691,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListJobs",
 			Handler:    _Control_ListJobs_Handler,
 		},
+		{
+			MethodName: "Unban",
+			Handler:    _Control_Unban_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -471,6 +705,11 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "WatchBannedList",
 			Handler:       _Control_WatchBannedList_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchJobs",
+			Handler:       _Control_WatchJobs_Handler,
 			ServerStreams: true,
 		},
 		{

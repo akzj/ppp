@@ -32,6 +32,13 @@ const (
 // Data is the ppp-service data plane service (node-to-node + leaf pulls).
 // Cancellation is not done via hop-by-hop RPC: requests for a banned file
 // are rejected directly (see common.BannedFile).
+//
+// Back-to-source modes (see docs/design-v2.md §3.5):
+//   - pass-through: relay a child piece request upstream without storing.
+//   - full-download subtask: download the whole file, cache locally, then
+//     serve. Default in the machine-room scenario (all nodes need the file).
+//
+// The mode is a node/tree-local configuration, not a per-request field.
 type DataClient interface {
 	// Fetch a single piece by index (unary, one 4MB piece per call)
 	GetPiece(ctx context.Context, in *GetPieceRequest, opts ...grpc.CallOption) (*GetPieceResponse, error)
@@ -108,6 +115,13 @@ func (c *dataClient) Unsubscribe(ctx context.Context, in *UnsubscribeRequest, op
 // Data is the ppp-service data plane service (node-to-node + leaf pulls).
 // Cancellation is not done via hop-by-hop RPC: requests for a banned file
 // are rejected directly (see common.BannedFile).
+//
+// Back-to-source modes (see docs/design-v2.md §3.5):
+//   - pass-through: relay a child piece request upstream without storing.
+//   - full-download subtask: download the whole file, cache locally, then
+//     serve. Default in the machine-room scenario (all nodes need the file).
+//
+// The mode is a node/tree-local configuration, not a per-request field.
 type DataServer interface {
 	// Fetch a single piece by index (unary, one 4MB piece per call)
 	GetPiece(context.Context, *GetPieceRequest) (*GetPieceResponse, error)

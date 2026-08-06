@@ -12,6 +12,7 @@ package topology
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
@@ -43,21 +44,31 @@ type upstreamGroup struct {
 // Build computes the upstream address table for every node in the tree.
 //
 // Every node receives exactly one entry:
-//   - the primary root (lowest node ID) has an empty upstream list because it
-//     pulls directly from the source;
+//   - the primary root (lowest node ID) pulls directly from the source
+//     (PullFromSource=true with an empty upstream list);
 //   - every other root lists the addresses of all remaining roots, so sibling
-//     roots can fetch and mutually sync;
-//   - each member lists the addresses of every node in its parent group.
+//     roots can fetch and mutually sync (PullFromSource=false);
+//   - each member lists the addresses of every node in its parent group
+//     (PullFromSource=false).
 //
-// The returned topology mirrors Tree.Generation and Tree.Id.
+// The input is validated before any computation: node IDs must be non-empty
+// and unique, node addresses must be non-empty, and the number of roots must
+// not exceed Tree.RootCount when it is configured (RootCount<=0 means no
+// limit). The returned topology mirrors Tree.Generation and Tree.Id.
 func Build(opts Options) (*pppv1.Topology, error) {
 	if opts.Tree == nil {
 		return nil, errors.New("topology: nil tree")
+	}
+	if err := validateNodes(opts.Nodes); err != nil {
+		return nil, err
 	}
 
 	roots, members := splitNodes(opts.Nodes)
 	if len(roots) == 0 {
 		return nil, errors.New("topology: tree has no root node")
+	}
+	if rootCount := int(opts.Tree.GetRootCount()); rootCount > 0 && len(roots) > rootCount {
+		return nil, fmt.Errorf("topology: %d roots exceed tree root_count %d", len(roots), rootCount)
 	}
 
 	groupSize := int(opts.Tree.GetGroupMembers())
@@ -81,6 +92,30 @@ func Build(opts Options) (*pppv1.Topology, error) {
 		Generation:    opts.Tree.GetGeneration(),
 		NodeUpstreams: upstreams(rootGroup, roots),
 	}, nil
+}
+
+// validateNodes enforces per-node invariants before the topology is built:
+// every ID must be non-empty and unique (a duplicate would silently overwrite
+// an entry or duplicate an address), and every address must be non-empty
+// (upstreams are address lists). Nil entries are ignored.
+func validateNodes(nodes []*pppv1.Node) error {
+	seen := make(map[string]struct{}, len(nodes))
+	for _, n := range nodes {
+		if n == nil {
+			continue
+		}
+		if n.GetId() == "" {
+			return errors.New("topology: node with empty id")
+		}
+		if _, dup := seen[n.GetId()]; dup {
+			return fmt.Errorf("topology: duplicate node id %q", n.GetId())
+		}
+		seen[n.GetId()] = struct{}{}
+		if n.GetAddr() == "" {
+			return fmt.Errorf("topology: node %q has empty addr", n.GetId())
+		}
+	}
+	return nil
 }
 
 // splitNodes classifies nodes by role. Nodes with an unspecified role are
@@ -148,15 +183,17 @@ func orchestrate(root *upstreamGroup, groups []*upstreamGroup, groupChildren int
 }
 
 // upstreams builds the node_id -> NodeUpstream table. Roots are handled first
-// (the primary root gets an empty list), then a breadth-first walk over the
-// group tree maps every member group to its parent group's addresses.
+// (the primary root pulls from the source with an empty list), then a
+// breadth-first walk over the group tree maps every member group to its
+// parent group's addresses.
 func upstreams(root *upstreamGroup, roots []*pppv1.Node) map[string]*pppv1.NodeUpstream {
 	result := make(map[string]*pppv1.NodeUpstream)
 
-	// Roots: the first (lowest ID) is primary; the others peer with every
-	// remaining root so they can fetch and mutually sync.
+	// Roots: the first (lowest ID) is primary and pulls from the source
+	// directly (PullFromSource=true with empty addrs); the others peer with
+	// every remaining root so they can fetch and mutually sync.
 	if len(roots) > 0 {
-		result[roots[0].GetId()] = &pppv1.NodeUpstream{}
+		result[roots[0].GetId()] = &pppv1.NodeUpstream{PullFromSource: true}
 		for _, r := range roots[1:] {
 			addrs := make([]string, 0, len(roots)-1)
 			for _, other := range roots {
@@ -164,13 +201,15 @@ func upstreams(root *upstreamGroup, roots []*pppv1.Node) map[string]*pppv1.NodeU
 					addrs = append(addrs, other.GetAddr())
 				}
 			}
+			// PullFromSource stays false for non-primary roots.
 			result[r.GetId()] = &pppv1.NodeUpstream{Addrs: addrs}
 		}
 	}
 
 	// Member groups: the addresses of a parent group become the upstream of
-	// every node in its child groups. Each member gets its own copy so callers
-	// cannot mutate one entry and affect its siblings.
+	// every node in its child groups (PullFromSource stays false). Each member
+	// gets its own copy so callers cannot mutate one entry and affect its
+	// siblings.
 	queue := []*upstreamGroup{root}
 	for len(queue) > 0 {
 		g := queue[0]

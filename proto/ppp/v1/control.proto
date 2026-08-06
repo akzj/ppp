@@ -10,6 +10,12 @@ option go_package = "github.com/akzj/ppp/gen/ppp/v1;pppv1";
 // - Nodes register/heartbeat and sync topology and the banned list here.
 // - Orchestration systems create/query/cancel distribution jobs here.
 service Control {
+  // ===== Tree lifecycle =====
+  rpc CreateTree(CreateTreeRequest) returns (CreateTreeResponse);
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse);
+  rpc ListTrees(ListTreesRequest) returns (ListTreesResponse);
+  rpc DeleteTree(DeleteTreeRequest) returns (DeleteTreeResponse);
+
   // ===== Node onboarding =====
   rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -26,10 +32,45 @@ service Control {
   rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);
   rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  // WatchJobs pushes new/updated job assignments to root nodes of a tree.
+  // Root nodes subscribe and start pulling the file from Source on receipt.
+  rpc WatchJobs(WatchJobsRequest) returns (stream JobUpdate);
+  // Unban removes a file from the banned list (undo a wrong cancel).
+  rpc Unban(UnbanRequest) returns (UnbanResponse);
 
   // Node progress reporting
   rpc SyncProgress(stream ProgressRecord) returns (SyncProgressResponse);
 }
+
+// ===== Tree lifecycle =====
+
+message CreateTreeRequest {
+  Tree tree = 1;
+}
+message CreateTreeResponse {
+  Tree tree = 1;
+}
+
+message GetTreeRequest {
+  string tree_id = 1;
+}
+message GetTreeResponse {
+  Tree tree = 1;
+}
+
+message ListTreesRequest {}
+message ListTreesResponse {
+  repeated Tree trees = 1;
+}
+
+message DeleteTreeRequest {
+  string tree_id = 1;
+}
+message DeleteTreeResponse {
+  bool deleted = 1;
+}
+
+// ===== Node onboarding =====
 
 message RegisterNodeRequest {
   Node node = 1;
@@ -61,11 +102,12 @@ message TopologyUpdate {
 message Topology {
   string tree_id = 1;
   int64 generation = 2;
-  // node_id -> upstream node addrs (ordered; random/round-robin selection)
+  // node_id -> upstream (ordered; random/round-robin selection)
   map<string, NodeUpstream> node_upstreams = 3;
 }
 message NodeUpstream {
-  repeated string addrs = 1; // parent node gRPC addrs
+  repeated string addrs = 1; // parent node gRPC addrs (empty when pulling from source)
+  bool pull_from_source = 2; // primary root pulls from Source directly (disambiguates empty addrs)
 }
 
 message WatchBannedListRequest {
@@ -74,8 +116,10 @@ message WatchBannedListRequest {
 }
 message BannedListUpdate {
   int64 generation = 1;
-  repeated BannedFile added = 2;
-  // unban reserved: repeated TreeKey removed = 3;
+  repeated BannedFile added = 2;   // newly banned files
+  bool full_snapshot = 3;          // true when this update is a full snapshot
+  repeated BannedFile snapshot = 4; // full banned list (valid when full_snapshot=true)
+  repeated TreeKey removed = 5;    // unbanned files
 }
 message SyncBannedListRequest {
   string tree_id = 1;
@@ -85,6 +129,8 @@ message SyncBannedListResponse {
   int64 generation = 1;
   repeated BannedFile banned = 2;
 }
+
+// ===== Job orchestration =====
 
 message CreateJobRequest {
   string tree_id = 1;
@@ -99,30 +145,57 @@ message CreateJobResponse {
 }
 
 message QueryJobRequest {
-  string job_id = 1;
+  string job_id = 1;              // center jobs only: "job:<uuid>"
 }
 message QueryJobResponse {
   Job job = 1;
 }
 
+// job_id convention:
+//   center-generated jobs: "job:<uuid>"
+//   local (scale-out back-to-source) jobs: "local:<uuid>" — nodes generate locally;
+//   the control plane accepts their progress without requiring a Job record.
+// Cancellation key is (tree_id, filename), NOT job_id: banning a file
+// cancels every center job AND every local fetch for that file in the tree.
 message CancelJobRequest {
-  // job_id may be center-generated; locally-initiated tasks may also cancel
-  // by (tree_id, filename).
-  string job_id = 1;
-  string tree_id = 2;
-  string filename = 3;
+  string job_id = 1;              // optional; center job that triggered the cancel
+  string tree_id = 2;             // required when filename is set
+  string filename = 3;            // required when job_id is empty
   string reason = 4;
 }
 message CancelJobResponse {
   bool canceled = 1;
+  bool already_banned = 2;        // file was already on the banned list
+  int32 affected_jobs = 3;        // center jobs for that file now canceled
 }
 
 message ListJobsRequest {
   string tree_id = 1;
   Job.JobState state = 2;
+  int32 page_size = 3;
+  string page_token = 4;
 }
 message ListJobsResponse {
   repeated Job jobs = 1;
+  string next_page_token = 2;
+}
+
+message WatchJobsRequest {
+  string tree_id = 1;
+  // Replay jobs created after this timestamp (unix seconds) on subscribe.
+  int64 since_unix = 2;
+}
+message JobUpdate {
+  Job job = 1;                    // full job on create/update
+  bool removed = 2;               // true when the job is no longer actionable
+}
+
+message UnbanRequest {
+  string tree_id = 1;
+  string filename = 2;
+}
+message UnbanResponse {
+  bool unbanned = 1;
 }
 
 message ProgressRecord {

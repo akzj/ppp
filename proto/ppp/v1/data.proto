@@ -9,6 +9,12 @@ option go_package = "github.com/akzj/ppp/gen/ppp/v1;pppv1";
 // Data is the ppp-service data plane service (node-to-node + leaf pulls).
 // Cancellation is not done via hop-by-hop RPC: requests for a banned file
 // are rejected directly (see common.BannedFile).
+//
+// Back-to-source modes (see docs/design-v2.md §3.5):
+//   - pass-through: relay a child piece request upstream without storing.
+//   - full-download subtask: download the whole file, cache locally, then
+//     serve. Default in the machine-room scenario (all nodes need the file).
+// The mode is a node/tree-local configuration, not a per-request field.
 service Data {
   // Fetch a single piece by index (unary, one 4MB piece per call)
   rpc GetPiece(GetPieceRequest) returns (GetPieceResponse);
@@ -64,11 +70,14 @@ message SubscribeRequest {
   TreeKey key = 1;
   string job_id = 2;
   string child_node_id = 3;
-  int64 lease_seconds = 4;   // lease duration, renewed by heartbeat
+  int64 lease_seconds = 4;   // requested lease duration (default 30s if 0)
 }
 message SubscribeResponse {
   bool accepted = 1;
   bool banned = 2;           // file is forbidden to distribute
+  int64 granted_lease_seconds = 3; // actual lease granted; renew before expiry
+  // Subscribe is idempotent: re-subscribing with the same (key, job_id,
+  // child_node_id) renews the lease instead of creating a second one.
 }
 
 message UnsubscribeRequest {
