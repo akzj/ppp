@@ -301,9 +301,7 @@ func TestBannedDiskStoreRoundTrip(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	files := []*pppv1.BannedFile{{TreeId: "t1", Filename: "a.bin"}, {TreeId: "t1", Filename: "b.bin"}}
-	if err := b.Save(7, files); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
+	b.Save(7, files)
 	_ = b.Close()
 
 	b2, err := openBannedDiskStore(dir)

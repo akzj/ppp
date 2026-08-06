@@ -256,9 +256,9 @@ func TestBannedSaveCoalesce(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	// Burst of saves within the coalesce window.
-	_ = b.Save(1, []*pppv1.BannedFile{{TreeId: "t1", Filename: "a.bin"}})
-	_ = b.Save(2, []*pppv1.BannedFile{{TreeId: "t1", Filename: "b.bin"}})
-	_ = b.Save(3, []*pppv1.BannedFile{{TreeId: "t1", Filename: "c.bin"}})
+	b.Save(1, []*pppv1.BannedFile{{TreeId: "t1", Filename: "a.bin"}})
+	b.Save(2, []*pppv1.BannedFile{{TreeId: "t1", Filename: "b.bin"}})
+	b.Save(3, []*pppv1.BannedFile{{TreeId: "t1", Filename: "c.bin"}})
 	if err := b.Close(); err != nil { // flushes the latest synchronously
 		t.Fatalf("Close: %v", err)
 	}
