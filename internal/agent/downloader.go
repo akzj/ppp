@@ -23,7 +23,17 @@ const (
 	// noUpstreamRetry is how long a downloader waits before re-checking for
 	// upstreams when it has none (topology may have changed).
 	noUpstreamRetry = 250 * time.Millisecond
+	// pieceCooldown is how long a piece is not re-dispatched after a
+	// persistent fetch failure, preventing a hot retry loop against a dead or
+	// misbehaving peer. Active demand (a waiting GetPiece) or a topology
+	// change clears it early.
+	pieceCooldown = 5 * time.Second
 )
+
+// pieceFetchTimeout bounds each upstream GetPiece call so a hung peer cannot
+// starve a file forever; the parent still gets plenty of time to be
+// downloading the piece itself. A var so tests can lower it.
+var pieceFetchTimeout = 60 * time.Second
 
 // Sentinel errors used by the downloader and its callers.
 var (
@@ -86,6 +96,7 @@ type Downloader struct {
 	size      int64
 	numPieces int64
 	inflight  map[int64]bool
+	cooldown  map[int64]time.Time // pieces not re-dispatched before this time
 	waiters   map[int64][]*pieceWaiter
 	fileErr   error
 	complete  bool
@@ -115,6 +126,7 @@ func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo top
 		ctx:         ctx,
 		cancel:      cancel,
 		inflight:    make(map[int64]bool),
+		cooldown:    make(map[int64]time.Time),
 		waiters:     make(map[int64][]*pieceWaiter),
 		wakeCh:      make(chan struct{}, 1),
 	}
@@ -156,6 +168,9 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 		d.mu.Unlock()
 		return nil, err
 	}
+	// Active demand for this piece clears its failure cooldown so a waiting
+	// request is retried immediately instead of waiting out the backoff.
+	delete(d.cooldown, index)
 	d.waiters[index] = append(d.waiters[index], w)
 	d.ensureSizeLocked(d.size) // size may be 0 if only WaitPiece was called; nothing to fetch yet
 	d.mu.Unlock()
@@ -166,6 +181,21 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 			return nil, err
 		}
 	case <-ctx.Done():
+		// Remove this waiter so disconnected callers cannot accumulate in the
+		// waiters map indefinitely (P1-3).
+		d.mu.Lock()
+		if ws := d.waiters[index]; len(ws) > 0 {
+			for i, w2 := range ws {
+				if w2 == w {
+					d.waiters[index] = append(ws[:i], ws[i+1:]...)
+					break
+				}
+			}
+			if len(d.waiters[index]) == 0 {
+				delete(d.waiters, index)
+			}
+		}
+		d.mu.Unlock()
 		return nil, ctx.Err()
 	}
 	return d.store.Get(d.treeID, d.filename, index)
@@ -216,8 +246,12 @@ func (d *Downloader) failWaitersLocked(err error) {
 	d.waiters = make(map[int64][]*pieceWaiter)
 }
 
-// wake unblocks a downloader waiting for upstreams (topology changed).
+// wake unblocks a downloader waiting for upstreams and clears every piece
+// cooldown (a topology change is a fresh opportunity to fetch).
 func (d *Downloader) wake() {
+	d.mu.Lock()
+	d.cooldown = make(map[int64]time.Time)
+	d.mu.Unlock()
 	select {
 	case d.wakeCh <- struct{}{}:
 	default:
@@ -272,12 +306,16 @@ func (d *Downloader) run() {
 	}
 }
 
-// nextMissingLocked returns the first piece not stored and not in flight, or
-// -1 when nothing is missing.
+// nextMissingLocked returns the first piece not stored, not in flight and not
+// cooling down, or -1 when nothing is dispatchable.
 func (d *Downloader) nextMissingLocked() int64 {
+	now := time.Now()
 	for i := int64(0); i < d.numPieces; i++ {
 		if d.inflight[i] {
 			continue
+		}
+		if now.Before(d.cooldown[i]) {
+			continue // persistent failure recently; back off (P1-2)
 		}
 		if !d.store.HasPiece(d.treeID, d.filename, i) {
 			return i
@@ -342,10 +380,15 @@ func (d *Downloader) fetchPiece(index int64) {
 		}
 	}
 	if err != nil {
-		// Persistent failure: leave the piece missing. Waiters are bounded by
-		// their own context; a later Ensure re-triggers the fetch.
+		// Persistent failure: leave the piece missing and cool it down so a
+		// dead or misbehaving peer cannot cause a hot retry loop. Waiters are
+		// bounded by their own context; active demand or a topology change
+		// clears the cooldown early.
 		d.mu.Lock()
 		delete(d.inflight, index)
+		if !errors.Is(err, errNoUpstream) {
+			d.cooldown[index] = time.Now().Add(pieceCooldown)
+		}
 		d.mu.Unlock()
 		return
 	}
@@ -408,7 +451,11 @@ func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
 		return nil, err
 	}
 	from := append(append([]*pppv1.Hop(nil), d.baseFrom...), &pppv1.Hop{NodeId: d.nodeID, JobId: d.jobID})
-	resp, err := client.GetPiece(d.ctx, &pppv1.GetPieceRequest{
+	// Bound each upstream call so a hung peer cannot starve the file; the
+	// parent still gets pieceFetchTimeout to be downloading the piece itself.
+	callCtx, cancel := context.WithTimeout(d.ctx, pieceFetchTimeout)
+	defer cancel()
+	resp, err := client.GetPiece(callCtx, &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename},
 		Index: index,
 		Size:  d.size,
@@ -425,7 +472,12 @@ func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
 			return nil, errors.New("agent: empty piece from peer")
 		}
 		data := p.GetData()
-		if h := p.GetInfo().GetHash(); h != 0 && crc64.Checksum(data, crcTable) != h {
+		h := p.GetInfo().GetHash()
+		if h == 0 {
+			// Defensive: a zero hash is invalid; treat it as a failed fetch.
+			return nil, errors.New("agent: peer returned zero hash")
+		}
+		if crc64.Checksum(data, crcTable) != h {
 			return nil, errors.New("agent: piece crc mismatch from peer")
 		}
 		return data, nil
