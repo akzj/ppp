@@ -2,9 +2,11 @@ package ctl
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,7 +216,10 @@ func TestHeartbeatTimeoutPrune(t *testing.T) {
 	if got := len(srv.regNodesByTree("t1")); got != 1 {
 		t.Fatalf("registered nodes after prune = %d, want 1", got)
 	}
-	topo, gen := srv.currentTopologyLocked(&pppv1.Tree{Id: "t1", GroupMembers: 2, GroupChildren: 2})
+	topo, gen, err := srv.currentTopologyLocked(&pppv1.Tree{Id: "t1", GroupMembers: 2, GroupChildren: 2})
+	if err != nil {
+		t.Fatalf("currentTopologyLocked: %v", err)
+	}
 	if gen != 3 {
 		t.Fatalf("generation after prune = %d, want 3", gen)
 	}
@@ -371,7 +376,7 @@ func startTestGRPC(t *testing.T) (pppv1.ControlClient, func()) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	gs, err := ServeControl(ctx, cfg, lis)
+	gs, done, err := ServeControl(ctx, cfg, lis)
 	if err != nil {
 		cancel()
 		t.Fatalf("ServeControl: %v", err)
@@ -386,6 +391,7 @@ func startTestGRPC(t *testing.T) (pppv1.ControlClient, func()) {
 		conn.Close()
 		gs.Stop()
 		cancel()
+		<-done // wait for store close before the next test
 	}
 	return pppv1.NewControlClient(conn), cleanup
 }
@@ -587,7 +593,9 @@ func TestGRPCWatchTopology(t *testing.T) {
 		t.Fatalf("WatchTopology: %v", err)
 	}
 
-	// Registering a root must push a full topology update (generation >= 1).
+	// Registering a root must push a full topology update with the r1 entry.
+	// The stream may first deliver the initial snapshot (empty if registration
+	// had not completed yet), so read until the expected update arrives.
 	if _, err := client.RegisterNode(ctx, &pppv1.RegisterNodeRequest{
 		Node: &pppv1.Node{Id: "r1", Addr: "10.0.0.1", TreeId: "t1", Role: pppv1.Node_ROOT},
 	}); err != nil {
@@ -597,17 +605,383 @@ func TestGRPCWatchTopology(t *testing.T) {
 		up  *pppv1.TopologyUpdate
 		err error
 	}
-	ch := make(chan res, 1)
-	go func() { up, err := stream.Recv(); ch <- res{up, err} }()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			t.Fatalf("recv topology: %v", r.err)
+	deadline := time.After(10 * time.Second)
+	for {
+		ch := make(chan res, 1)
+		go func() { up, err := stream.Recv(); ch <- res{up, err} }()
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				t.Fatalf("recv topology: %v", r.err)
+			}
+			if r.up.GetGeneration() >= 1 && r.up.GetTopology().GetNodeUpstreams()["r1"] != nil {
+				return // got the expected update
+			}
+			// Initial empty snapshot; keep reading.
+		case <-deadline:
+			t.Fatal("timed out waiting for topology update with r1 entry")
 		}
-		if r.up.GetGeneration() < 1 || r.up.GetTopology().GetNodeUpstreams()["r1"] == nil {
-			t.Fatalf("topology push = %v, want r1 entry with gen >= 1", r.up)
+	}
+}
+
+// ============ Analyst review tests (phase 1.5) ============
+
+// recvBannedChan reads one update from a fanout channel with a timeout.
+func recvBannedChan(t *testing.T, ch chan *pppv1.BannedListUpdate) *pppv1.BannedListUpdate {
+	t.Helper()
+	select {
+	case up := <-ch:
+		return up
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for banned update on fanout channel")
+		return nil
+	}
+}
+
+// TestRegisterNodeRootCountRace verifies that concurrent root registrations
+// never exceed the tree's root_count quota.
+func TestRegisterNodeRootCountRace(t *testing.T) {
+	srv := newTestServer(t)
+	createTree(t, srv, "t1", 3)
+	const attempts = 6
+	var wg sync.WaitGroup
+	errs := make([]error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := srv.RegisterNode(context.Background(), &pppv1.RegisterNodeRequest{
+				Node: &pppv1.Node{Id: fmt.Sprintf("r%d", i), Addr: fmt.Sprintf("10.0.0.%d", i+1), TreeId: "t1", Role: pppv1.Node_ROOT},
+			})
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	success := 0
+	for _, err := range errs {
+		if err == nil {
+			success++
+		}
+	}
+	if success > 3 {
+		t.Fatalf("%d roots registered concurrently, want <= 3", success)
+	}
+	if got := srv.regCountRoots("t1", ""); got != 3 {
+		t.Fatalf("registry roots = %d, want exactly 3", got)
+	}
+}
+
+// TestUnbanThenReban verifies unban removes the record and a later cancel
+// re-bans it with a fresh generation, pushing each change.
+func TestUnbanThenReban(t *testing.T) {
+	srv := newTestServer(t)
+	createTree(t, srv, "t1", 3)
+	ch := srv.fanout.subscribeBanned("t1")
+	defer srv.fanout.unsubscribeBanned("t1", ch)
+
+	// Ban -> added push at gen 1.
+	if _, err := srv.CancelJob(context.Background(), &pppv1.CancelJobRequest{TreeId: "t1", Filename: "a.bin", Reason: "first"}); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	up := recvBannedChan(t, ch)
+	if len(up.GetAdded()) != 1 || up.GetGeneration() != 1 {
+		t.Fatalf("ban push = %v, want added at gen 1", up)
+	}
+
+	// Unban -> removed push at gen 2.
+	if _, err := srv.Unban(context.Background(), &pppv1.UnbanRequest{TreeId: "t1", Filename: "a.bin"}); err != nil {
+		t.Fatalf("Unban: %v", err)
+	}
+	up = recvBannedChan(t, ch)
+	if len(up.GetRemoved()) != 1 || up.GetGeneration() != 2 {
+		t.Fatalf("unban push = %v, want removed at gen 2", up)
+	}
+
+	// Re-ban -> added push at gen 3 with the same file.
+	if _, err := srv.CancelJob(context.Background(), &pppv1.CancelJobRequest{TreeId: "t1", Filename: "a.bin", Reason: "again"}); err != nil {
+		t.Fatalf("CancelJob again: %v", err)
+	}
+	up = recvBannedChan(t, ch)
+	if len(up.GetAdded()) != 1 || up.GetGeneration() != 3 || up.GetAdded()[0].GetReason() != "again" {
+		t.Fatalf("re-ban push = %v, want added at gen 3", up)
+	}
+}
+
+// TestFanoutSubscriberCleanup verifies unsubscribe removes the channel and
+// closeTree closes every channel of a tree (ending watch streams) and clears
+// the subscriber maps.
+func TestFanoutSubscriberCleanup(t *testing.T) {
+	f := newFanout()
+
+	// Unsubscribe leaves no residue.
+	ch := f.subscribeTopology("t1")
+	f.unsubscribeTopology("t1", ch)
+	f.mu.Lock()
+	n := len(f.topology["t1"])
+	f.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("topology subscribers after unsubscribe = %d, want 0", n)
+	}
+
+	// closeTree closes all three channel kinds and clears the maps.
+	chT := f.subscribeTopology("t2")
+	chB := f.subscribeBanned("t2")
+	chJ := f.subscribeJobs("t2")
+	f.closeTree("t2")
+	if _, ok := <-chT; ok {
+		t.Fatal("topology channel not closed by closeTree")
+	}
+	if _, ok := <-chB; ok {
+		t.Fatal("banned channel not closed by closeTree")
+	}
+	if _, ok := <-chJ; ok {
+		t.Fatal("jobs channel not closed by closeTree")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.topology["t2"] != nil || f.banned["t2"] != nil || f.jobs["t2"] != nil {
+		t.Fatal("closeTree did not clear subscriber maps")
+	}
+}
+
+// TestStoreRestartPersistence verifies trees, nodes, jobs, banned records and
+// generations survive a store close/reopen, including a cancellation.
+func TestStoreRestartPersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ctl.db")
+	cfg := DefaultConfig()
+	cfg.DBPath = path
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	srv := NewServer(st, cfg)
+	srv.now = func() time.Time { return testNow }
+	createTree(t, srv, "t1", 3)
+	registerNode(t, srv, "r1", "t1", "10.0.0.1", pppv1.Node_ROOT)
+	jobResp, err := srv.CreateJob(context.Background(), &pppv1.CreateJobRequest{TreeId: "t1", Filename: "a.bin"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := srv.CancelJob(context.Background(), &pppv1.CancelJobRequest{JobId: jobResp.GetJob().GetId()}); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	st2, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st2.Close()
+
+	if _, err := st2.GetTree("t1"); err != nil {
+		t.Fatalf("tree not persisted: %v", err)
+	}
+	nodes, err := st2.ListNodes("t1")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("nodes not persisted: %v (len=%d)", err, len(nodes))
+	}
+	job, err := st2.GetJob(jobResp.GetJob().GetId())
+	if err != nil || job.GetState() != pppv1.Job_CANCELED {
+		t.Fatalf("job not persisted/canceled: %v (state=%v)", err, job.GetState())
+	}
+	if _, err := st2.GetBanned("t1", "a.bin"); err != nil {
+		t.Fatalf("banned record not persisted: %v", err)
+	}
+	if gen, _ := st2.BannedGeneration("t1"); gen != 1 {
+		t.Fatalf("banned generation = %d, want 1", gen)
+	}
+	if gen, _ := st2.TopologyGeneration("t1"); gen != 1 {
+		t.Fatalf("topology generation = %d, want 1", gen)
+	}
+}
+
+// TestZeroRootPrunePushesEmptyTopology verifies that pruning the only root
+// bumps the generation and pushes an empty topology so members detect the
+// broken link instead of keeping a stale root.
+func TestZeroRootPrunePushesEmptyTopology(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.HeartbeatTimeout = 30 * time.Second
+	createTree(t, srv, "t1", 3)
+	registerNode(t, srv, "r1", "t1", "10.0.0.1", pppv1.Node_ROOT)
+	registerNode(t, srv, "m01", "t1", "10.0.0.11", pppv1.Node_MEMBER)
+	ch := srv.fanout.subscribeTopology("t1")
+	defer srv.fanout.unsubscribeTopology("t1", ch)
+
+	// Keep the member alive; the root stays stale and will be pruned, leaving
+	// the tree with zero roots.
+	testNow = testNow.Add(10 * time.Second)
+	if _, err := srv.Heartbeat(context.Background(), &pppv1.HeartbeatRequest{
+		Node: &pppv1.Node{Id: "m01"},
+	}); err != nil {
+		t.Fatalf("Heartbeat m01: %v", err)
+	}
+	testNow = testNow.Add(25 * time.Second) // root age 35s > 30s, member age 25s < 30s
+	srv.pruneExpired()
+
+	select {
+	case up := <-ch:
+		if up.GetGeneration() != 3 {
+			t.Fatalf("generation after zero-root prune = %d, want 3", up.GetGeneration())
+		}
+		ups := up.GetTopology().GetNodeUpstreams()
+		if len(ups) != 1 || ups["m01"] == nil || len(ups["m01"].GetAddrs()) != 0 {
+			t.Fatalf("empty topology = %v, want only m01 with empty addrs", ups)
+		}
+		if ups["r1"] != nil {
+			t.Fatal("pruned root still present in pushed topology")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no topology push after zero-root prune")
+	}
+}
+
+// TestGRPCWatchJobsReplay verifies a subscriber that connects after a job was
+// created receives the active job immediately.
+func TestGRPCWatchJobsReplay(t *testing.T) {
+	client, cleanup := startTestGRPC(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.CreateTree(ctx, &pppv1.CreateTreeRequest{
+		Tree: &pppv1.Tree{Id: "t1", App: "app", Environment: "prod", Idc: "idc1", RootCount: 3, GroupMembers: 2, GroupChildren: 2},
+	}); err != nil {
+		t.Fatalf("CreateTree: %v", err)
+	}
+	jobResp, err := client.CreateJob(ctx, &pppv1.CreateJobRequest{TreeId: "t1", Filename: "a.bin"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	stream, err := client.WatchJobs(ctx, &pppv1.WatchJobsRequest{TreeId: "t1"})
+	if err != nil {
+		t.Fatalf("WatchJobs: %v", err)
+	}
+	up := recvJob(t, stream)
+	if up.GetRemoved() || up.GetJob().GetId() != jobResp.GetJob().GetId() {
+		t.Fatalf("replay = %v, want active job %s", up, jobResp.GetJob().GetId())
+	}
+}
+
+// TestCreateJobSourceFallback verifies CreateJob without a source inherits the
+// tree default source.
+func TestCreateJobSourceFallback(t *testing.T) {
+	srv := newTestServer(t)
+	tr := &pppv1.Tree{Id: "t1", App: "app", Environment: "prod", Idc: "idc1", RootCount: 3,
+		Source: &pppv1.Source{Type: pppv1.Source_OSS, Urls: []string{"https://s3.example.com/bucket"}}}
+	if _, err := srv.CreateTree(context.Background(), &pppv1.CreateTreeRequest{Tree: tr}); err != nil {
+		t.Fatalf("CreateTree: %v", err)
+	}
+
+	resp, err := srv.CreateJob(context.Background(), &pppv1.CreateJobRequest{TreeId: "t1", Filename: "a.bin"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	src := resp.GetJob().GetSource()
+	if src.GetType() != pppv1.Source_OSS || len(src.GetUrls()) != 1 || src.GetUrls()[0] != "https://s3.example.com/bucket" {
+		t.Fatalf("job source = %v, want tree default OSS source", src)
+	}
+}
+
+// TestListJobsInvalidToken verifies a malformed page_token is rejected.
+func TestListJobsInvalidToken(t *testing.T) {
+	srv := newTestServer(t)
+	_, err := srv.ListJobs(context.Background(), &pppv1.ListJobsRequest{PageToken: "not-a-number"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListJobs(bad token) code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestHeartbeatKeepsRegisteredAddr documents that Heartbeat only refreshes
+// last_seen: an address change in the request is ignored (re-register to move).
+func TestHeartbeatKeepsRegisteredAddr(t *testing.T) {
+	srv := newTestServer(t)
+	createTree(t, srv, "t1", 3)
+	registerNode(t, srv, "m01", "t1", "10.0.0.11", pppv1.Node_MEMBER)
+
+	if _, err := srv.Heartbeat(context.Background(), &pppv1.HeartbeatRequest{
+		Node: &pppv1.Node{Id: "m01", Addr: "10.0.0.99"},
+	}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if got := srv.regGet("m01").GetAddr(); got != "10.0.0.11" {
+		t.Fatalf("registered addr after heartbeat = %q, want 10.0.0.11 (addr change ignored)", got)
+	}
+}
+
+// TestRegisterNodeResponseBanned verifies the register response carries the
+// tree's current banned list.
+func TestRegisterNodeResponseBanned(t *testing.T) {
+	srv := newTestServer(t)
+	createTree(t, srv, "t1", 3)
+	if _, _, err := srv.store.AddBanned(&pppv1.BannedFile{TreeId: "t1", Filename: "a.bin", Reason: "seed"}); err != nil {
+		t.Fatalf("AddBanned: %v", err)
+	}
+
+	resp := registerNode(t, srv, "r1", "t1", "10.0.0.1", pppv1.Node_ROOT)
+	if len(resp.GetBanned()) != 1 || resp.GetBanned()[0].GetFilename() != "a.bin" {
+		t.Fatalf("RegisterNode banned = %v, want [a.bin]", resp.GetBanned())
+	}
+}
+
+// TestGRPCShutdownWithActiveWatch verifies P1-1: canceling the ServeControl
+// context with an active watch stream open must not hang shutdown. GracefulStop
+// is bounded and falls back to a forced Stop, then the store is closed.
+func TestGRPCShutdownWithActiveWatch(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	gs, done, err := ServeControl(ctx, cfg, lis)
+	if err != nil {
+		cancel()
+		t.Fatalf("ServeControl: %v", err)
+	}
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		cancel()
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	client := pppv1.NewControlClient(conn)
+
+	if _, err := client.CreateTree(ctx, &pppv1.CreateTreeRequest{
+		Tree: &pppv1.Tree{Id: "t1", App: "app", Environment: "prod", Idc: "idc1", RootCount: 3, GroupMembers: 2, GroupChildren: 2},
+	}); err != nil {
+		t.Fatalf("CreateTree: %v", err)
+	}
+	// Leave a watch stream active (consume its snapshot so it stays open).
+	// The stream uses its own context so it survives the server-side shutdown.
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+	stream, err := client.WatchBannedList(streamCtx, &pppv1.WatchBannedListRequest{TreeId: "t1"})
+	if err != nil {
+		t.Fatalf("WatchBannedList: %v", err)
+	}
+	recvBanned(t, stream)
+
+	// Shut down by canceling the server context only. GracefulStop must not
+	// hang on the still-active stream: it is bounded and falls back to a
+	// forced Stop, then the store is closed.
+	start := time.Now()
+	cancel()
+	select {
+	case <-done:
+		elapsed := time.Since(start)
+		if elapsed > 10*time.Second {
+			t.Fatalf("shutdown took %v, want < 10s", elapsed)
+		}
+		if elapsed < time.Second {
+			t.Fatalf("shutdown took %v, want the bounded graceful wait for the active stream", elapsed)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for topology update")
+		gs.Stop()
+		t.Fatal("shutdown hung with an active watch stream")
 	}
 }
