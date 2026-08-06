@@ -304,19 +304,28 @@ func TestStoreProgressUpsert(t *testing.T) {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
 
-	st.mu.Lock()
-	latest := st.progress[progressKey("t1", "job:1", "a.bin", "n1")]
-	st.mu.Unlock()
-	if latest.GetProgress() != 80 {
-		t.Fatalf("latest progress for (t1,job:1,a.bin,n1) = %d, want 80", latest.GetProgress())
-	}
-
+	// The upsert keeps the latest per (tree, job, file, node): n1/job:1 is 80.
 	all, err := st.ListProgress("t1")
 	if err != nil {
 		t.Fatalf("ListProgress: %v", err)
 	}
 	if len(all) != 3 {
 		t.Fatalf("ListProgress(t1) len = %d, want 3", len(all))
+	}
+	found := 0
+	for _, p := range all {
+		if p.GetJobId() == "job:1" && p.GetProgress() == 80 {
+			found++
+		}
+		if p.GetJobId() == "job:2" && p.GetProgress() == 99 {
+			found++
+		}
+		if p.GetProgress() == 10 {
+			found++
+		}
+	}
+	if found != 3 {
+		t.Fatalf("ListProgress(t1) missing records (found %d), got %v", found, all)
 	}
 	none, err := st.ListProgress("t2")
 	if err != nil {
@@ -331,6 +340,37 @@ func TestStoreProgressUpsert(t *testing.T) {
 	}
 	if len(allAll) != 3 {
 		t.Fatalf("ListProgress(\"\") len = %d, want 3", len(allAll))
+	}
+}
+
+// TestStoreProgressPersistsAcrossRestart verifies progress is durable in
+// bbolt: records survive a close/reopen.
+func TestStoreProgressPersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ctl.db")
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if err := st.UpsertProgress(&pppv1.ProgressState{TreeId: "t1", JobId: "job:1", Filename: "a.bin", Progress: 55}, "n1"); err != nil {
+		t.Fatalf("UpsertProgress: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	st2, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer st2.Close()
+	all, err := st2.ListProgress("t1")
+	if err != nil {
+		t.Fatalf("ListProgress after restart: %v", err)
+	}
+	if len(all) != 1 || all[0].GetProgress() != 55 {
+		// Note: ListProgress returns the ProgressState; the node id lives in
+		// the stored ProgressRecord key.
+		t.Fatalf("progress after restart = %v, want [progress 55]", all)
 	}
 }
 

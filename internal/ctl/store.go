@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
-	"sync"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"go.etcd.io/bbolt"
@@ -72,11 +70,12 @@ type Store interface {
 
 // bbolt buckets.
 var (
-	bucketTrees  = []byte("trees")
-	bucketNodes  = []byte("nodes")
-	bucketJobs   = []byte("jobs")
-	bucketBanned = []byte("banned")
-	bucketMeta   = []byte("meta")
+	bucketTrees    = []byte("trees")
+	bucketNodes    = []byte("nodes")
+	bucketJobs     = []byte("jobs")
+	bucketBanned   = []byte("banned")
+	bucketMeta     = []byte("meta")
+	bucketProgress = []byte("progress")
 )
 
 // meta key prefixes.
@@ -88,9 +87,6 @@ var (
 // bboltStore is the bbolt-backed Store implementation.
 type bboltStore struct {
 	db *bbolt.DB
-
-	mu       sync.Mutex // guards progress (in-memory until phase 4)
-	progress map[string]*pppv1.ProgressState
 }
 
 // OpenStore opens (or creates) the bbolt database at path and ensures all
@@ -101,7 +97,7 @@ func OpenStore(path string) (*bboltStore, error) {
 		return nil, fmt.Errorf("ctl: open store %q: %w", path, err)
 	}
 	if err := db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{bucketTrees, bucketNodes, bucketJobs, bucketBanned, bucketMeta} {
+		for _, b := range [][]byte{bucketTrees, bucketNodes, bucketJobs, bucketBanned, bucketMeta, bucketProgress} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -111,7 +107,7 @@ func OpenStore(path string) (*bboltStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("ctl: init store: %w", err)
 	}
-	return &bboltStore{db: db, progress: make(map[string]*pppv1.ProgressState)}, nil
+	return &bboltStore{db: db}, nil
 }
 
 // Close closes the underlying database.
@@ -197,15 +193,6 @@ func (s *bboltStore) DeleteTreeData(treeID string) error {
 	if treeID == "" {
 		return errors.New("ctl: tree id is required")
 	}
-	// Progress lives in memory.
-	s.mu.Lock()
-	for k := range s.progress {
-		if strings.HasPrefix(k, treeID+"\x00") {
-			delete(s.progress, k)
-		}
-	}
-	s.mu.Unlock()
-
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		// Keys are collected first because modifying a bucket while
 		// iterating it is not safe.
@@ -251,6 +238,15 @@ func (s *bboltStore) DeleteTreeData(treeID string) error {
 		}
 		for _, k := range jobKeys {
 			if err := tx.Bucket(bucketJobs).Delete(k); err != nil {
+				return err
+			}
+		}
+		progressKeys, err := collect(tx.Bucket(bucketProgress), []byte(treeID+"\x00"))
+		if err != nil {
+			return err
+		}
+		for _, k := range progressKeys {
+			if err := tx.Bucket(bucketProgress).Delete(k); err != nil {
 				return err
 			}
 		}
@@ -563,27 +559,56 @@ func progressKey(treeID, jobID, filename, nodeID string) string {
 	return treeID + "\x00" + jobID + "\x00" + filename + "\x00" + nodeID
 }
 
+// UpsertProgress stores the latest progress report per (tree, job, file,
+// node), durable in bbolt (upsert: a repeated report overwrites the previous
+// one).
 func (s *bboltStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error {
 	if p == nil || p.GetTreeId() == "" || p.GetFilename() == "" || nodeID == "" {
 		return errors.New("ctl: progress tree_id, filename and node_id are required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.progress[progressKey(p.GetTreeId(), p.GetJobId(), p.GetFilename(), nodeID)] = p
-	return nil
+	rec := &pppv1.ProgressRecord{State: p, NodeId: nodeID}
+	data, err := proto.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketProgress).Put(
+			[]byte(progressKey(p.GetTreeId(), p.GetJobId(), p.GetFilename(), nodeID)),
+			data,
+		)
+	})
 }
 
 // ListProgress returns the latest progress report per node for a tree (all
 // trees when treeID is empty). Order is unspecified. Each report is a deep
 // copy so callers cannot mutate the store's internal records.
 func (s *bboltStore) ListProgress(treeID string) ([]*pppv1.ProgressState, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var out []*pppv1.ProgressState
-	for k, p := range s.progress {
-		if treeID == "" || strings.HasPrefix(k, treeID+"\x00") {
-			out = append(out, proto.Clone(p).(*pppv1.ProgressState))
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(bucketProgress)
+		if treeID == "" {
+			return b.ForEach(func(_, v []byte) error {
+				r := &pppv1.ProgressRecord{}
+				if err := proto.Unmarshal(v, r); err != nil {
+					return err
+				}
+				out = append(out, r.GetState())
+				return nil
+			})
 		}
+		prefix := []byte(treeID + "\x00")
+		c := b.Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			r := &pppv1.ProgressRecord{}
+			if err := proto.Unmarshal(v, r); err != nil {
+				return err
+			}
+			out = append(out, r.GetState())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
