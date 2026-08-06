@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -49,7 +50,7 @@ type Agent struct {
 // persisted banned list is loaded immediately so a restarted node keeps
 // rejecting banned files during the restart window, before the ctl sync.
 func NewAgent(cfg *Config) (*Agent, error) {
-	store, err := NewFilePieceStore(cfg.DownloadPath)
+	store, err := newPieceStore(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +72,18 @@ func NewAgent(cfg *Config) (*Agent, error) {
 	}
 	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency, cfg.LeaseTTL)
 	return a, nil
+}
+
+// newPieceStore selects the piece store implementation from the config.
+func newPieceStore(cfg *Config) (PieceStore, error) {
+	switch cfg.Store {
+	case "", "mmap":
+		return NewMmapPieceStore(cfg.DownloadPath)
+	case "file":
+		return NewFilePieceStore(cfg.DownloadPath)
+	default:
+		return nil, fmt.Errorf("agent: unknown store %q (want mmap|file)", cfg.Store)
+	}
 }
 
 // NodeID returns the registered node id.
