@@ -150,13 +150,25 @@ func (d *Downloader) ensureSizeLocked(size int64) {
 }
 
 // startLocked starts the fetch loop if a size is known and it is not already
-// running. Call with d.mu held.
+// running. A downloader that was stopped silently (no need left) is
+// restartable: a fresh context is created. Banned/failed downloaders never
+// restart. Call with d.mu held.
 func (d *Downloader) startLocked() {
-	if d.running || d.size <= 0 {
+	if d.running || d.size <= 0 || d.fileErr != nil {
 		return
+	}
+	if d.ctx.Err() != nil {
+		d.ctx, d.cancel = context.WithCancel(context.Background())
 	}
 	d.running = true
 	go d.run()
+}
+
+// Need returns the current need count (tests/debugging).
+func (d *Downloader) Need() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.need
 }
 
 // Ensure records the file size. Fetching starts only once a need exists
