@@ -189,6 +189,10 @@ func (s *bboltStore) DeleteTree(id string) error {
 	})
 }
 
+// DeleteTreeData removes a tree's nodes, jobs, banned records and progress.
+// Per-tree generation counters in the meta bucket are deliberately KEPT:
+// generations are monotonic across the tree's lifetime, so a re-created tree
+// continues from a higher generation instead of reusing stale ones.
 func (s *bboltStore) DeleteTreeData(treeID string) error {
 	if treeID == "" {
 		return errors.New("ctl: tree id is required")
@@ -570,14 +574,15 @@ func (s *bboltStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error
 }
 
 // ListProgress returns the latest progress report per node for a tree (all
-// trees when treeID is empty). Order is unspecified.
+// trees when treeID is empty). Order is unspecified. Each report is a deep
+// copy so callers cannot mutate the store's internal records.
 func (s *bboltStore) ListProgress(treeID string) ([]*pppv1.ProgressState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*pppv1.ProgressState
 	for k, p := range s.progress {
 		if treeID == "" || strings.HasPrefix(k, treeID+"\x00") {
-			out = append(out, p)
+			out = append(out, proto.Clone(p).(*pppv1.ProgressState))
 		}
 	}
 	return out, nil

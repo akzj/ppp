@@ -139,15 +139,20 @@ func shutdownGRPC(gs *grpc.Server) {
 // ============ Topology helpers (require s.mu) ============
 
 // buildTreeTopology computes the tree's topology from its registered nodes.
-// When no computable topology exists (e.g. no root registered), it returns an
-// empty topology: every registered node gets an empty upstream so subscribers
-// can detect that the tree has no usable link right now.
-func buildTreeTopology(tree *pppv1.Tree, nodes []*pppv1.Node) *pppv1.Topology {
+// A missing root is a legitimate transient state (e.g. the last root was
+// pruned): it yields an empty topology in which every registered node gets an
+// empty upstream, so subscribers can detect the broken link. Any other Build
+// error (duplicate node id, empty address, ...) is a data-integrity problem
+// and is returned instead of being silently turned into an empty topology.
+func buildTreeTopology(tree *pppv1.Tree, nodes []*pppv1.Node) (*pppv1.Topology, error) {
 	topo, err := topology.Build(topology.Options{Tree: tree, Nodes: nodes})
 	if err != nil {
-		topo = &pppv1.Topology{TreeId: tree.GetId(), NodeUpstreams: emptyUpstreams(nodes)}
+		if errors.Is(err, topology.ErrNoRoot) {
+			return &pppv1.Topology{TreeId: tree.GetId(), NodeUpstreams: emptyUpstreams(nodes)}, nil
+		}
+		return nil, err
 	}
-	return topo
+	return topo, nil
 }
 
 // emptyUpstreams maps every node to an empty upstream list.
@@ -160,13 +165,17 @@ func emptyUpstreams(nodes []*pppv1.Node) map[string]*pppv1.NodeUpstream {
 }
 
 // currentTopologyLocked computes the tree's current topology and generation
-// without changing the generation. A store error is returned, not swallowed.
+// without changing the generation. Store and topology-data errors are
+// returned, not swallowed.
 func (s *Server) currentTopologyLocked(tree *pppv1.Tree) (*pppv1.Topology, int64, error) {
 	gen, err := s.store.TopologyGeneration(tree.GetId())
 	if err != nil {
 		return nil, 0, err
 	}
-	topo := buildTreeTopology(tree, s.regNodesByTree(tree.GetId()))
+	topo, err := buildTreeTopology(tree, s.regNodesByTree(tree.GetId()))
+	if err != nil {
+		return nil, 0, err
+	}
 	topo.Generation = gen
 	return topo, gen, nil
 }
@@ -181,7 +190,10 @@ func (s *Server) refreshTopologyLocked(tree *pppv1.Tree) (*pppv1.Topology, int64
 	if err != nil {
 		return nil, 0, err
 	}
-	topo := buildTreeTopology(tree, s.regNodesByTree(tree.GetId()))
+	topo, err := buildTreeTopology(tree, s.regNodesByTree(tree.GetId()))
+	if err != nil {
+		return nil, 0, err
+	}
 	topo.Generation = gen
 	return topo, gen, nil
 }

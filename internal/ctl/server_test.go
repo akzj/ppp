@@ -931,6 +931,7 @@ func TestRegisterNodeResponseBanned(t *testing.T) {
 // context with an active watch stream open must not hang shutdown. GracefulStop
 // is bounded and falls back to a forced Stop, then the store is closed.
 func TestGRPCShutdownWithActiveWatch(t *testing.T) {
+
 	cfg := DefaultConfig()
 	cfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1022,5 +1023,31 @@ func TestGRPCDeleteTreeEndsWatchStreams(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("watch stream still open after DeleteTree")
+	}
+}
+
+// TestBuildTreeTopologyErrorDistinction verifies that a missing root yields a
+// legal empty topology while data-integrity errors (duplicate node id) surface
+// instead of being silently turned into an empty topology.
+func TestBuildTreeTopologyErrorDistinction(t *testing.T) {
+	tr := &pppv1.Tree{Id: "t1", GroupMembers: 2, GroupChildren: 2}
+
+	// Missing root: legal empty topology with the member listed.
+	memberOnly := []*pppv1.Node{{Id: "m1", Addr: "10.0.0.11", TreeId: "t1", Role: pppv1.Node_MEMBER}}
+	topo, err := buildTreeTopology(tr, memberOnly)
+	if err != nil {
+		t.Fatalf("no-root should yield an empty topology, got %v", err)
+	}
+	if topo.GetNodeUpstreams()["m1"] == nil {
+		t.Fatalf("empty topology missing member entry: %v", topo)
+	}
+
+	// Dirty data: duplicate node id must error, not become an empty topology.
+	dup := []*pppv1.Node{
+		{Id: "r1", Addr: "10.0.0.1", TreeId: "t1", Role: pppv1.Node_ROOT},
+		{Id: "r1", Addr: "10.0.0.2", TreeId: "t1", Role: pppv1.Node_ROOT},
+	}
+	if _, err := buildTreeTopology(tr, dup); err == nil {
+		t.Fatal("dirty data (duplicate node id) should error, got nil")
 	}
 }

@@ -34,6 +34,12 @@ type Options struct {
 	Nodes []*pppv1.Node
 }
 
+// ErrNoRoot is returned by Build when the tree has no root node, so no
+// topology can be computed. Callers may distinguish this legitimate condition
+// (e.g. produce an empty topology) from data-validation errors such as a
+// duplicate node id or an empty address.
+var ErrNoRoot = errors.New("topology: tree has no root node")
+
 // upstreamGroup is an internal node of the layering graph.
 type upstreamGroup struct {
 	parent   *upstreamGroup
@@ -65,7 +71,7 @@ func Build(opts Options) (*pppv1.Topology, error) {
 
 	roots, members := splitNodes(opts.Nodes)
 	if len(roots) == 0 {
-		return nil, errors.New("topology: tree has no root node")
+		return nil, ErrNoRoot
 	}
 	if rootCount := int(opts.Tree.GetRootCount()); rootCount > 0 && len(roots) > rootCount {
 		return nil, fmt.Errorf("topology: %d roots exceed tree root_count %d", len(roots), rootCount)
