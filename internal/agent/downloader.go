@@ -722,23 +722,41 @@ func mapPeerError(e *pppv1.Error) error {
 }
 
 // peerPool caches Data gRPC client connections per address.
+// peerIdleTimeout is how long an unused peer connection is kept before the
+// pool's opportunistic GC closes it, so topology churn cannot grow the pool
+// unbounded.
+const peerIdleTimeout = 10 * time.Minute
+
 type peerPool struct {
-	mu      sync.Mutex
-	conns   map[string]*grpc.ClientConn
-	clients map[string]pppv1.DataClient
+	mu       sync.Mutex
+	conns    map[string]*grpc.ClientConn
+	clients  map[string]pppv1.DataClient
+	lastUsed map[string]time.Time
 }
 
 func newPeerPool() *peerPool {
 	return &peerPool{
-		conns:   make(map[string]*grpc.ClientConn),
-		clients: make(map[string]pppv1.DataClient),
+		conns:    make(map[string]*grpc.ClientConn),
+		clients:  make(map[string]pppv1.DataClient),
+		lastUsed: make(map[string]time.Time),
 	}
 }
 
 func (p *peerPool) client(addr string) (pppv1.DataClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := time.Now()
+	// Opportunistic GC: close conns idle beyond the timeout (P3-optimization).
+	for a, c := range p.conns {
+		if now.Sub(p.lastUsed[a]) > peerIdleTimeout {
+			_ = c.Close()
+			delete(p.conns, a)
+			delete(p.clients, a)
+			delete(p.lastUsed, a)
+		}
+	}
 	if c, ok := p.clients[addr]; ok {
+		p.lastUsed[addr] = now
 		return c, nil
 	}
 	conn, err := grpc.NewClient(addr,
@@ -752,6 +770,7 @@ func (p *peerPool) client(addr string) (pppv1.DataClient, error) {
 		return nil, fmt.Errorf("agent: dial peer %s: %w", addr, err)
 	}
 	p.conns[addr] = conn
+	p.lastUsed[addr] = now
 	c := pppv1.NewDataClient(conn)
 	p.clients[addr] = c
 	return c, nil

@@ -14,6 +14,14 @@ type leaseKey struct {
 // on the Data service). Subscribes are idempotent renewals; expired leases are
 // pruned by a background scan. The granted duration is explicit so the
 // downloader's need accounting stays aligned with the real expiry.
+//
+// Orphan-lease window / renewal cadence: the agent's lease scan runs every
+// LeaseTTL/2, so after a child stops renewing (e.g. its downloader stopped),
+// its lease is pruned within about one TTL — the orphan window is bounded by
+// [TTL/2, TTL]. Downloaders renew their upstream leases at leaseTTL/2 while
+// fetching, so the upstream sees a fresh lease during active fetches and the
+// lease lapses within one TTL after the fetch stops, propagating the stop
+// upstream (design §3.3).
 type LeaseManager struct {
 	mu     sync.Mutex
 	ttl    time.Duration
