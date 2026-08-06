@@ -32,12 +32,24 @@ func newFanout() *Fanout {
 	}
 }
 
-// clearTree drops every subscriber of a tree (used when the tree is deleted).
-func (f *Fanout) clearTree(treeID string) {
+// closeTree ends every active watch stream of a tree (used when the tree is
+// deleted): subscriber channels are closed and the maps cleared. Handlers see
+// the closed channel as a nil receive and return. Publishes are safe: once
+// the maps are cleared there are no channels left to send to.
+func (f *Fanout) closeTree(treeID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for ch := range f.topology[treeID] {
+		close(ch)
+	}
 	delete(f.topology, treeID)
+	for ch := range f.banned[treeID] {
+		close(ch)
+	}
 	delete(f.banned, treeID)
+	for ch := range f.jobs[treeID] {
+		close(ch)
+	}
 	delete(f.jobs, treeID)
 }
 
