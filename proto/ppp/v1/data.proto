@@ -32,7 +32,9 @@ message GetPieceRequest {
   TreeKey key = 1;
   int64 index = 2;
   int64 size = 3;            // total file size (for validation)
-  string job_id = 4;         // locally or center generated
+  // job_id follows the convention in control.proto CancelJobRequest:
+  // center jobs "job:<uuid>", local back-to-source jobs "local:<uuid>".
+  string job_id = 4;
   repeated Hop from = 5;     // loop-prevention path (nodeID + jobID)
 }
 message Hop {

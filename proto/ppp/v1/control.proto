@@ -116,10 +116,12 @@ message WatchBannedListRequest {
 }
 message BannedListUpdate {
   int64 generation = 1;
-  repeated BannedFile added = 2;   // newly banned files
-  bool full_snapshot = 3;          // true when this update is a full snapshot
+  // When full_snapshot is true, snapshot is authoritative and added/removed
+  // must be ignored. Otherwise added/removed are incremental deltas.
+  bool full_snapshot = 3;
   repeated BannedFile snapshot = 4; // full banned list (valid when full_snapshot=true)
-  repeated TreeKey removed = 5;    // unbanned files
+  repeated BannedFile added = 2;   // newly banned files (delta)
+  repeated TreeKey removed = 5;    // unbanned files (delta)
 }
 message SyncBannedListRequest {
   string tree_id = 1;
@@ -158,9 +160,14 @@ message QueryJobResponse {
 // Cancellation key is (tree_id, filename), NOT job_id: banning a file
 // cancels every center job AND every local fetch for that file in the tree.
 message CancelJobRequest {
-  string job_id = 1;              // optional; center job that triggered the cancel
-  string tree_id = 2;             // required when filename is set
-  string filename = 3;            // required when job_id is empty
+  // Either (job_id) or (tree_id + filename) must be provided.
+  // - job_id only: ctl resolves the job to (tree_id, filename) and bans it.
+  // - job_id + filename: job_id is recorded as BannedFile.job_id (trigger).
+  // Banning (tree_id, filename) forbids that file for the whole tree: every
+  // center job and every local fetch for it is stopped.
+  string job_id = 1;
+  string tree_id = 2;
+  string filename = 3;
   string reason = 4;
 }
 message CancelJobResponse {
@@ -182,8 +189,9 @@ message ListJobsResponse {
 
 message WatchJobsRequest {
   string tree_id = 1;
-  // Replay jobs created after this timestamp (unix seconds) on subscribe.
-  int64 since_unix = 2;
+  // On subscribe, the server first replays every active (CREATED/DISTRIBUTING)
+  // job for the tree, then streams new jobs and removals. No wall-clock
+  // cursor is used, so client/server clock skew cannot drop jobs.
 }
 message JobUpdate {
   Job job = 1;                    // full job on create/update

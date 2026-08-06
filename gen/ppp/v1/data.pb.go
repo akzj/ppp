@@ -80,12 +80,14 @@ func (Error_ErrorCode) EnumDescriptor() ([]byte, []int) {
 }
 
 type GetPieceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Index         int64                  `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
-	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`               // total file size (for validation)
-	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"` // locally or center generated
-	From          []*Hop                 `protobuf:"bytes,5,rep,name=from,proto3" json:"from,omitempty"`                // loop-prevention path (nodeID + jobID)
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Index int64                  `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
+	Size  int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"` // total file size (for validation)
+	// job_id follows the convention in control.proto CancelJobRequest:
+	// center jobs "job:<uuid>", local back-to-source jobs "local:<uuid>".
+	JobId         string `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	From          []*Hop `protobuf:"bytes,5,rep,name=from,proto3" json:"from,omitempty"` // loop-prevention path (nodeID + jobID)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

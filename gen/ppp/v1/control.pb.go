@@ -836,12 +836,14 @@ func (x *WatchBannedListRequest) GetFromGeneration() int64 {
 }
 
 type BannedListUpdate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Generation    int64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
-	Added         []*BannedFile          `protobuf:"bytes,2,rep,name=added,proto3" json:"added,omitempty"`                                    // newly banned files
-	FullSnapshot  bool                   `protobuf:"varint,3,opt,name=full_snapshot,json=fullSnapshot,proto3" json:"full_snapshot,omitempty"` // true when this update is a full snapshot
-	Snapshot      []*BannedFile          `protobuf:"bytes,4,rep,name=snapshot,proto3" json:"snapshot,omitempty"`                              // full banned list (valid when full_snapshot=true)
-	Removed       []*TreeKey             `protobuf:"bytes,5,rep,name=removed,proto3" json:"removed,omitempty"`                                // unbanned files
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Generation int64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	// When full_snapshot is true, snapshot is authoritative and added/removed
+	// must be ignored. Otherwise added/removed are incremental deltas.
+	FullSnapshot  bool          `protobuf:"varint,3,opt,name=full_snapshot,json=fullSnapshot,proto3" json:"full_snapshot,omitempty"`
+	Snapshot      []*BannedFile `protobuf:"bytes,4,rep,name=snapshot,proto3" json:"snapshot,omitempty"` // full banned list (valid when full_snapshot=true)
+	Added         []*BannedFile `protobuf:"bytes,2,rep,name=added,proto3" json:"added,omitempty"`       // newly banned files (delta)
+	Removed       []*TreeKey    `protobuf:"bytes,5,rep,name=removed,proto3" json:"removed,omitempty"`   // unbanned files (delta)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -883,13 +885,6 @@ func (x *BannedListUpdate) GetGeneration() int64 {
 	return 0
 }
 
-func (x *BannedListUpdate) GetAdded() []*BannedFile {
-	if x != nil {
-		return x.Added
-	}
-	return nil
-}
-
 func (x *BannedListUpdate) GetFullSnapshot() bool {
 	if x != nil {
 		return x.FullSnapshot
@@ -900,6 +895,13 @@ func (x *BannedListUpdate) GetFullSnapshot() bool {
 func (x *BannedListUpdate) GetSnapshot() []*BannedFile {
 	if x != nil {
 		return x.Snapshot
+	}
+	return nil
+}
+
+func (x *BannedListUpdate) GetAdded() []*BannedFile {
+	if x != nil {
+		return x.Added
 	}
 	return nil
 }
@@ -1240,11 +1242,16 @@ func (x *QueryJobResponse) GetJob() *Job {
 // Cancellation key is (tree_id, filename), NOT job_id: banning a file
 // cancels every center job AND every local fetch for that file in the tree.
 type CancelJobRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`    // optional; center job that triggered the cancel
-	TreeId        string                 `protobuf:"bytes,2,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"` // required when filename is set
-	Filename      string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`           // required when job_id is empty
-	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Either (job_id) or (tree_id + filename) must be provided.
+	// - job_id only: ctl resolves the job to (tree_id, filename) and bans it.
+	// - job_id + filename: job_id is recorded as BannedFile.job_id (trigger).
+	// Banning (tree_id, filename) forbids that file for the whole tree: every
+	// center job and every local fetch for it is stopped.
+	JobId         string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	TreeId        string `protobuf:"bytes,2,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
+	Filename      string `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
+	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1488,10 +1495,8 @@ func (x *ListJobsResponse) GetNextPageToken() string {
 }
 
 type WatchJobsRequest struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	TreeId string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
-	// Replay jobs created after this timestamp (unix seconds) on subscribe.
-	SinceUnix     int64 `protobuf:"varint,2,opt,name=since_unix,json=sinceUnix,proto3" json:"since_unix,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1531,13 +1536,6 @@ func (x *WatchJobsRequest) GetTreeId() string {
 		return x.TreeId
 	}
 	return ""
-}
-
-func (x *WatchJobsRequest) GetSinceUnix() int64 {
-	if x != nil {
-		return x.SinceUnix
-	}
-	return 0
 }
 
 type JobUpdate struct {
@@ -1841,10 +1839,10 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"\x10BannedListUpdate\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x03R\n" +
-	"generation\x12(\n" +
-	"\x05added\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x05added\x12#\n" +
+	"generation\x12#\n" +
 	"\rfull_snapshot\x18\x03 \x01(\bR\ffullSnapshot\x12.\n" +
-	"\bsnapshot\x18\x04 \x03(\v2\x12.ppp.v1.BannedFileR\bsnapshot\x12)\n" +
+	"\bsnapshot\x18\x04 \x03(\v2\x12.ppp.v1.BannedFileR\bsnapshot\x12(\n" +
+	"\x05added\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x05added\x12)\n" +
 	"\aremoved\x18\x05 \x03(\v2\x0f.ppp.v1.TreeKeyR\aremoved\"Y\n" +
 	"\x15SyncBannedListRequest\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12'\n" +
@@ -1884,11 +1882,9 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"page_token\x18\x04 \x01(\tR\tpageToken\"[\n" +
 	"\x10ListJobsResponse\x12\x1f\n" +
 	"\x04jobs\x18\x01 \x03(\v2\v.ppp.v1.JobR\x04jobs\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"J\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"+\n" +
 	"\x10WatchJobsRequest\x12\x17\n" +
-	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12\x1d\n" +
-	"\n" +
-	"since_unix\x18\x02 \x01(\x03R\tsinceUnix\"D\n" +
+	"\atree_id\x18\x01 \x01(\tR\x06treeId\"D\n" +
 	"\tJobUpdate\x12\x1d\n" +
 	"\x03job\x18\x01 \x01(\v2\v.ppp.v1.JobR\x03job\x12\x18\n" +
 	"\aremoved\x18\x02 \x01(\bR\aremoved\"C\n" +
@@ -1992,8 +1988,8 @@ var file_ppp_v1_control_proto_depIdxs = []int32{
 	36, // 8: ppp.v1.HeartbeatRequest.node:type_name -> ppp.v1.Node
 	14, // 9: ppp.v1.TopologyUpdate.topology:type_name -> ppp.v1.Topology
 	34, // 10: ppp.v1.Topology.node_upstreams:type_name -> ppp.v1.Topology.NodeUpstreamsEntry
-	37, // 11: ppp.v1.BannedListUpdate.added:type_name -> ppp.v1.BannedFile
-	37, // 12: ppp.v1.BannedListUpdate.snapshot:type_name -> ppp.v1.BannedFile
+	37, // 11: ppp.v1.BannedListUpdate.snapshot:type_name -> ppp.v1.BannedFile
+	37, // 12: ppp.v1.BannedListUpdate.added:type_name -> ppp.v1.BannedFile
 	38, // 13: ppp.v1.BannedListUpdate.removed:type_name -> ppp.v1.TreeKey
 	37, // 14: ppp.v1.SyncBannedListResponse.banned:type_name -> ppp.v1.BannedFile
 	39, // 15: ppp.v1.CreateJobRequest.source:type_name -> ppp.v1.Source
