@@ -19,6 +19,11 @@ func main() {
 	cfg := agent.DefaultConfig()
 	cfg.RegisterFlags(flag.CommandLine)
 	flag.Parse()
+	// Finalize converts the parsed role string into the typed proto role and
+	// validates the configuration (NewAgent expects a finalized config).
+	if err := cfg.Finalize(); err != nil {
+		log.Fatalf("ppp-service: %v", err)
+	}
 
 	a, err := agent.NewAgent(cfg)
 	if err != nil {
