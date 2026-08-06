@@ -213,6 +213,7 @@ func TestThreeNodeChainStopPropagation(t *testing.T) {
 	// --- the child (test client) subscribes to the parent and pulls a piece:
 	// the parent fetches from the root and subscribes to it upstream ---
 	parentClient := pppv1.NewDataClient(mustDial(t, parent.Addr()))
+
 	if _, err := parentClient.Subscribe(ctx, &pppv1.SubscribeRequest{
 		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, JobId: "job:1",
 		ChildNodeId: "child", LeaseSeconds: 1,
@@ -244,4 +245,34 @@ func TestThreeNodeChainStopPropagation(t *testing.T) {
 	waitFor(t, 5*time.Second, "parent + root downloaders reclaimed (chain stopped)", func() bool {
 		return parent.dm.Get("t1", "file.bin") == nil && root.dm.Get("t1", "file.bin") == nil
 	})
+}
+
+// TestBannedSaveCoalesce verifies the debounced Save keeps only the latest
+// snapshot and Close flushes it (a burst of applies collapses to one write).
+func TestBannedSaveCoalesce(t *testing.T) {
+	dir := t.TempDir()
+	b, err := openBannedDiskStore(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Burst of saves within the coalesce window.
+	_ = b.Save(1, []*pppv1.BannedFile{{TreeId: "t1", Filename: "a.bin"}})
+	_ = b.Save(2, []*pppv1.BannedFile{{TreeId: "t1", Filename: "b.bin"}})
+	_ = b.Save(3, []*pppv1.BannedFile{{TreeId: "t1", Filename: "c.bin"}})
+	if err := b.Close(); err != nil { // flushes the latest synchronously
+		t.Fatalf("Close: %v", err)
+	}
+
+	b2, err := openBannedDiskStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer b2.Close()
+	gen, files, err := b2.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if gen != 3 || len(files) != 1 || files[0].GetFilename() != "c.bin" {
+		t.Fatalf("Load after coalesce = (gen %d, %v), want (3, [c.bin])", gen, files)
+	}
 }
