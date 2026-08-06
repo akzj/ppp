@@ -202,7 +202,7 @@ func TestDownloaderSourcePull(t *testing.T) {
 	// Both pieces cached: file is complete.
 	done := false
 	for i := 0; i < 200 && !done; i++ {
-		_, _, done = d.Progress()
+		_, _, done, _ = d.Progress()
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !done {
