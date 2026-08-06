@@ -110,6 +110,14 @@ func TestStoreNodeCRUD(t *testing.T) {
 	if len(nodes) != 1 {
 		t.Fatalf("ListNodes(t2) len = %d, want 1", len(nodes))
 	}
+	// Empty tree id lists every node (startup registry reload).
+	all, err := st.ListNodes("")
+	if err != nil {
+		t.Fatalf("ListNodes(\"\"): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListNodes(\"\") len = %d, want 3", len(all))
+	}
 
 	if err := st.DeleteNode("t1", "n1"); err != nil {
 		t.Fatalf("DeleteNode: %v", err)

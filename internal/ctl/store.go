@@ -30,6 +30,8 @@ type Store interface {
 	DeleteTree(id string) error
 
 	// Nodes are persisted so restarts keep the registered node set.
+	// ListNodes returns the nodes of one tree, or all nodes when treeID is
+	// empty (used to reload the registry at startup).
 	PutNode(n *pppv1.Node) error
 	DeleteNode(treeID, nodeID string) error
 	ListNodes(treeID string) ([]*pppv1.Node, error)
@@ -212,13 +214,21 @@ func (s *bboltStore) DeleteNode(treeID, nodeID string) error {
 }
 
 func (s *bboltStore) ListNodes(treeID string) ([]*pppv1.Node, error) {
-	if treeID == "" {
-		return nil, errors.New("ctl: tree id is required")
-	}
-	prefix := []byte(treeID + "\x00")
 	var out []*pppv1.Node
 	err := s.db.View(func(tx *bbolt.Tx) error {
-		c := tx.Bucket(bucketNodes).Cursor()
+		b := tx.Bucket(bucketNodes)
+		if treeID == "" {
+			return b.ForEach(func(_, v []byte) error {
+				n := &pppv1.Node{}
+				if err := proto.Unmarshal(v, n); err != nil {
+					return err
+				}
+				out = append(out, n)
+				return nil
+			})
+		}
+		prefix := []byte(treeID + "\x00")
+		c := b.Cursor()
 		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
 			n := &pppv1.Node{}
 			if err := proto.Unmarshal(v, n); err != nil {
