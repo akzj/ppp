@@ -28,13 +28,14 @@ func (f *fakeTopology) PullFromSource() bool    { return f.pullFromSource }
 type fakeDataServer struct {
 	pppv1.UnimplementedDataServer
 
-	mu       sync.Mutex
-	pieces   map[string][]byte // tree\x00file\x00index -> data
-	errCode  pppv1.Error_ErrorCode
-	failures int
-	requests int
-	release  chan struct{} // when set, GetPiece blocks until released or ctx done
-	lastFrom []*pppv1.Hop
+	mu            sync.Mutex
+	pieces        map[string][]byte // tree\x00file\x00index -> data
+	errCode       pppv1.Error_ErrorCode
+	failures      int
+	zeroHashFirst int // serve this many pieces with hash==0
+	requests      int
+	release       chan struct{} // when set, GetPiece blocks until released or ctx done
+	lastFrom      []*pppv1.Hop
 }
 
 func (f *fakeDataServer) setErr(code pppv1.Error_ErrorCode) {
@@ -55,13 +56,17 @@ func (f *fakeDataServer) requestCount() int {
 	return f.requests
 }
 
-func (f *fakeDataServer) GetPiece(_ context.Context, req *pppv1.GetPieceRequest) (*pppv1.GetPieceResponse, error) {
+func (f *fakeDataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (*pppv1.GetPieceResponse, error) {
 	f.mu.Lock()
 	f.requests++
 	f.lastFrom = append([]*pppv1.Hop(nil), req.GetFrom()...)
 	fail := f.failures > 0
 	if fail {
 		f.failures--
+	}
+	zeroHash := f.zeroHashFirst > 0
+	if zeroHash {
+		f.zeroHashFirst--
 	}
 	code := f.errCode
 	release := f.release
@@ -70,7 +75,7 @@ func (f *fakeDataServer) GetPiece(_ context.Context, req *pppv1.GetPieceRequest)
 	if release != nil {
 		select {
 		case <-release:
-		case <-context.Background().Done():
+		case <-ctx.Done():
 		}
 	}
 	if fail {
@@ -91,6 +96,9 @@ func (f *fakeDataServer) GetPiece(_ context.Context, req *pppv1.GetPieceRequest)
 		}}, nil
 	}
 	h := crc64.Checksum(data, crcTable)
+	if zeroHash {
+		h = 0
+	}
 	return &pppv1.GetPieceResponse{Result: &pppv1.GetPieceResponse_Piece{
 		Piece: &pppv1.Piece{
 			Info: &pppv1.PieceInfo{Hash: h, Index: req.GetIndex(), Size: int32(len(data)), Offset: req.GetIndex() * PieceSize},
