@@ -63,7 +63,7 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		store:      store,
 		banned:     NewBannedList(),
 		leases:     NewLeaseManager(cfg.LeaseTTL),
-		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}},
+		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}, s3: &s3Source{}},
 		bannedDisk: bannedDisk,
 		nodeID:     cfg.ID,
 	}
