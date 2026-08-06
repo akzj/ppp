@@ -128,7 +128,7 @@ func newTestManager(t *testing.T, topo *fakeTopology, src Source) (*DownloaderMa
 	if src == nil {
 		src = &fakeSource{data: []byte("x")}
 	}
-	return NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4), store
+	return NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4, 30*time.Second), store
 }
 
 // fakeSource serves a whole file split by pieceSize.

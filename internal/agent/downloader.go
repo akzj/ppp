@@ -91,52 +91,64 @@ type Downloader struct {
 	concurrency int
 	mgr         *DownloaderManager
 
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	size      int64
-	numPieces int64
-	inflight  map[int64]bool
-	cooldown  map[int64]time.Time // pieces not re-dispatched before this time
-	waiters   map[int64][]*pieceWaiter
-	fileErr   error
-	complete  bool
-	running   bool
-	wakeCh    chan struct{}
+	mu              sync.Mutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	size            int64
+	numPieces       int64
+	inflight        map[int64]bool
+	cooldown        map[int64]time.Time // pieces not re-dispatched before this time
+	cooldownCleared map[int64]bool      // demand already cleared a cooldown once (anti-flood)
+	waiters         map[int64][]*pieceWaiter
+	fileErr         error
+	complete        bool
+	running         bool
+	wakeCh          chan struct{}
 	// need counts active holders of this file (child subscribers + active
 	// piece waiters); jobNeed marks a root job-driven download. When need
 	// reaches zero and the file is not complete the downloader stops and is
 	// reclaimed, so upstream leases expire and the stop propagates.
 	need    int
 	jobNeed bool
+
+	// Upstream leases keep the parents' downloaders alive while this node
+	// fetches from them (design §3.3). They are renewed while fetching and
+	// released on stop, so a stopped node propagates its stop upstream.
+	leaseTTL          time.Duration
+	upstreamLastRenew map[string]time.Time // upstream addr -> last renewal
+	upstreamLeases    map[string]struct{}  // upstream addrs currently subscribed
 }
 
 type pieceWaiter struct {
 	ch chan error // buffered: nil on piece arrival, else file error
 }
 
-func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, peers *peerPool, nodeID string, concurrency int, mgr *DownloaderManager) *Downloader {
+func newDownloader(need FileNeed, store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, peers *peerPool, nodeID string, concurrency int, mgr *DownloaderManager, leaseTTL time.Duration) *Downloader {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Downloader{
-		treeID:      need.TreeID,
-		filename:    need.Filename,
-		jobID:       need.JobID,
-		baseFrom:    append([]*pppv1.Hop(nil), need.From...),
-		store:       store,
-		banned:      banned,
-		topo:        topo,
-		source:      source,
-		treeSource:  treeSource,
-		peers:       peers,
-		nodeID:      nodeID,
-		concurrency: concurrency,
-		mgr:         mgr,
-		ctx:         ctx,
-		cancel:      cancel,
-		inflight:    make(map[int64]bool),
-		cooldown:    make(map[int64]time.Time),
-		waiters:     make(map[int64][]*pieceWaiter),
-		wakeCh:      make(chan struct{}, 1),
+		treeID:            need.TreeID,
+		filename:          need.Filename,
+		jobID:             need.JobID,
+		baseFrom:          append([]*pppv1.Hop(nil), need.From...),
+		store:             store,
+		banned:            banned,
+		topo:              topo,
+		source:            source,
+		treeSource:        treeSource,
+		peers:             peers,
+		nodeID:            nodeID,
+		concurrency:       concurrency,
+		mgr:               mgr,
+		leaseTTL:          leaseTTL,
+		ctx:               ctx,
+		cancel:            cancel,
+		inflight:          make(map[int64]bool),
+		cooldown:          make(map[int64]time.Time),
+		cooldownCleared:   make(map[int64]bool),
+		waiters:           make(map[int64][]*pieceWaiter),
+		wakeCh:            make(chan struct{}, 1),
+		upstreamLastRenew: make(map[string]time.Time),
+		upstreamLeases:    make(map[string]struct{}),
 	}
 }
 
@@ -151,14 +163,18 @@ func (d *Downloader) ensureSizeLocked(size int64) {
 
 // startLocked starts the fetch loop if a size is known and it is not already
 // running. A downloader that was stopped silently (no need left) is
-// restartable: a fresh context is created. Banned/failed downloaders never
-// restart. Call with d.mu held.
+// restartable: a fresh context is created and any stale in-flight markers are
+// dropped, so pieces that were being fetched when the previous run was
+// canceled can be re-dispatched. Cooldowns are deliberately NOT cleared here:
+// a restart must not let dense demand bypass the failure backoff (P2-1).
+// Banned/failed downloaders never restart. Call with d.mu held.
 func (d *Downloader) startLocked() {
 	if d.running || d.size <= 0 || d.fileErr != nil {
 		return
 	}
 	if d.ctx.Err() != nil {
 		d.ctx, d.cancel = context.WithCancel(context.Background())
+		d.inflight = make(map[int64]bool)
 	}
 	d.running = true
 	go d.run()
@@ -225,6 +241,7 @@ func (d *Downloader) stopSilent() {
 		d.cancel()
 	}
 	d.mu.Unlock()
+	d.releaseUpstreamLeases()
 	d.mgr.removeTerminal(d)
 }
 
@@ -244,9 +261,13 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 		d.mu.Unlock()
 		return nil, err
 	}
-	// Active demand for this piece clears its failure cooldown so a waiting
-	// request is retried immediately instead of waiting out the backoff.
-	delete(d.cooldown, index)
+	// Active demand may clear a piece's failure cooldown at most once per
+	// cooldown period so a waiting request is retried promptly, but dense or
+	// malicious requests cannot bypass the backoff (P2-1).
+	if cd, ok := d.cooldown[index]; ok && time.Now().Before(cd) && !d.cooldownCleared[index] {
+		d.cooldownCleared[index] = true
+		delete(d.cooldown, index)
+	}
 	d.waiters[index] = append(d.waiters[index], w)
 	d.need++ // this waiter holds one unit of local need until it exits
 	d.ensureSizeLocked(d.size)
@@ -296,23 +317,25 @@ func (d *Downloader) Progress() (downloaded int64, size int64, complete bool, er
 // agent shutdown.
 func (d *Downloader) stop(err error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.fileErr == nil {
 		d.fileErr = err
 	}
 	d.cancel()
 	d.failWaitersLocked(err)
+	d.mu.Unlock()
+	d.releaseUpstreamLeases()
 }
 
 // fail marks the file failed and notifies every waiter.
 func (d *Downloader) fail(err error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.fileErr == nil {
 		d.fileErr = err
 	}
 	d.cancel()
 	d.failWaitersLocked(err)
+	d.mu.Unlock()
+	d.releaseUpstreamLeases()
 }
 
 // failWaitersLocked delivers err to every waiter and clears the map.
@@ -326,10 +349,12 @@ func (d *Downloader) failWaitersLocked(err error) {
 }
 
 // wake unblocks a downloader waiting for upstreams and clears every piece
-// cooldown (a topology change is a fresh opportunity to fetch).
+// cooldown (a topology change is a fresh opportunity to fetch); the one-shot
+// demand-clear markers reset with them.
 func (d *Downloader) wake() {
 	d.mu.Lock()
 	d.cooldown = make(map[int64]time.Time)
+	d.cooldownCleared = make(map[int64]bool)
 	d.mu.Unlock()
 	select {
 	case d.wakeCh <- struct{}{}:
@@ -357,9 +382,11 @@ func (d *Downloader) run() {
 		}
 		d.running = false
 		d.mu.Unlock()
-		// Terminal downloaders are reclaimed so the manager cannot grow
-		// unbounded; the file data stays in the PieceStore.
+		// Terminal downloaders release their upstream leases (propagating the
+		// stop), are reclaimed so the manager cannot grow unbounded, and the
+		// file data stays in the PieceStore.
 		if complete || failed {
+			d.releaseUpstreamLeases()
 			d.mgr.removeTerminal(d)
 		}
 	}()
@@ -434,6 +461,15 @@ func (d *Downloader) checkCompleteLocked() {
 
 // fetchPiece fetches one piece with retries, stores it and notifies waiters.
 func (d *Downloader) fetchPiece(index int64) {
+	// Every exit path (including ctx cancellation) clears the in-flight mark,
+	// so a silently stopped downloader restarted later can re-dispatch the
+	// piece (P1-B).
+	defer func() {
+		d.mu.Lock()
+		delete(d.inflight, index)
+		d.mu.Unlock()
+	}()
+
 	if d.banned.IsBanned(d.treeID, d.filename) {
 		d.fail(errFileBanned)
 		return
@@ -479,7 +515,6 @@ func (d *Downloader) fetchPiece(index int64) {
 		// bounded by their own context; active demand or a topology change
 		// clears the cooldown early.
 		d.mu.Lock()
-		delete(d.inflight, index)
 		if !errors.Is(err, errNoUpstream) {
 			d.cooldown[index] = time.Now().Add(pieceCooldown)
 		}
@@ -487,9 +522,6 @@ func (d *Downloader) fetchPiece(index int64) {
 		return
 	}
 	if err := d.store.Put(d.treeID, d.filename, index, data); err != nil {
-		d.mu.Lock()
-		delete(d.inflight, index)
-		d.mu.Unlock()
 		return
 	}
 	d.pieceStored(index)
@@ -511,6 +543,90 @@ func (d *Downloader) pieceStored(index int64) {
 	}
 }
 
+// leaseRPCTimeout bounds each upstream lease RPC.
+const leaseRPCTimeout = 5 * time.Second
+
+// ensureUpstreamLeases renews this node's subscription to every upstream for
+// this file (at most once per leaseTTL/2) while it is fetching. Parents keep
+// the file's downloader alive (child need) for the lease duration; when this
+// downloader stops and stops renewing, the leases expire and the stop
+// propagates toward the source (design §3.3).
+func (d *Downloader) ensureUpstreamLeases(ctx context.Context) {
+	if d.leaseTTL <= 0 || d.topo.PullFromSource() {
+		return
+	}
+	renewBefore := time.Now().Add(-d.leaseTTL / 2)
+	for _, addr := range d.topo.UpstreamAddrs() {
+		d.mu.Lock()
+		last := d.upstreamLastRenew[addr]
+		_, subscribed := d.upstreamLeases[addr]
+		d.mu.Unlock()
+		if subscribed && last.After(renewBefore) {
+			continue // freshly renewed
+		}
+		if err := d.renewUpstreamLease(ctx, addr); err != nil {
+			if errors.Is(err, errFileBanned) {
+				d.fail(errFileBanned)
+				return
+			}
+			// Best effort: GetPiece still works without a lease.
+			continue
+		}
+	}
+}
+
+// renewUpstreamLease subscribes (idempotent renewal) to one upstream.
+func (d *Downloader) renewUpstreamLease(ctx context.Context, addr string) error {
+	client, err := d.peers.client(addr)
+	if err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, leaseRPCTimeout)
+	defer cancel()
+	resp, err := client.Subscribe(callCtx, &pppv1.SubscribeRequest{
+		Key:          &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename},
+		JobId:        d.jobID,
+		ChildNodeId:  d.nodeID,
+		LeaseSeconds: int64(d.leaseTTL.Seconds()),
+	})
+	if err != nil {
+		return err
+	}
+	if resp.GetBanned() {
+		return errFileBanned
+	}
+	d.mu.Lock()
+	d.upstreamLeases[addr] = struct{}{}
+	d.upstreamLastRenew[addr] = time.Now()
+	d.mu.Unlock()
+	return nil
+}
+
+// releaseUpstreamLeases explicitly unsubscribes from every upstream so the
+// stop propagates immediately instead of waiting for natural lease expiry.
+func (d *Downloader) releaseUpstreamLeases() {
+	d.mu.Lock()
+	addrs := make([]string, 0, len(d.upstreamLeases))
+	for addr := range d.upstreamLeases {
+		addrs = append(addrs, addr)
+	}
+	d.upstreamLeases = make(map[string]struct{})
+	d.mu.Unlock()
+	for _, addr := range addrs {
+		client, err := d.peers.client(addr)
+		if err != nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), leaseRPCTimeout)
+		_, _ = client.Unsubscribe(ctx, &pppv1.UnsubscribeRequest{
+			Key:         &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename},
+			JobId:       d.jobID,
+			ChildNodeId: d.nodeID,
+		})
+		cancel()
+	}
+}
+
 // fetchOnce fetches one piece from the source (primary root) or from the
 // upstream parents.
 func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
@@ -524,6 +640,7 @@ func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
 	if len(upstreams) == 0 {
 		return nil, errNoUpstream
 	}
+	d.ensureUpstreamLeases(d.ctx)
 	var lastErr error
 	for _, addr := range upstreams {
 		data, err := d.fetchFromPeer(addr, index)
@@ -645,14 +762,16 @@ type DownloaderManager struct {
 	peers       *peerPool
 	nodeID      string
 	concurrency int
+	leaseTTL    time.Duration
 
 	mu    sync.Mutex
 	files map[string]*Downloader
 }
 
 // NewDownloaderManager creates the manager. treeSource is the tree default
-// source (nil until the register response arrives).
-func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, nodeID string, concurrency int) *DownloaderManager {
+// source (nil until the register response arrives); leaseTTL is the upstream
+// session-lease duration downloaders request while fetching.
+func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, nodeID string, concurrency int, leaseTTL time.Duration) *DownloaderManager {
 	return &DownloaderManager{
 		store:       store,
 		banned:      banned,
@@ -662,6 +781,7 @@ func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyPro
 		peers:       newPeerPool(),
 		nodeID:      nodeID,
 		concurrency: concurrency,
+		leaseTTL:    leaseTTL,
 		files:       make(map[string]*Downloader),
 	}
 }
@@ -685,7 +805,7 @@ func (m *DownloaderManager) Ensure(need FileNeed) *Downloader {
 		if need.Source != nil {
 			src = need.Source
 		}
-		d = newDownloader(need, m.store, m.banned, m.topo, m.source, src, m.peers, m.nodeID, m.concurrency, m)
+		d = newDownloader(need, m.store, m.banned, m.topo, m.source, src, m.peers, m.nodeID, m.concurrency, m, m.leaseTTL)
 		m.files[key] = d
 	}
 	d.Ensure(need.Size)

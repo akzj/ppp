@@ -69,7 +69,7 @@ func NewAgent(cfg *Config) (*Agent, error) {
 	if gen, files, err := bannedDisk.Load(); err == nil {
 		a.banned.ApplyInitial(gen, files)
 	}
-	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency)
+	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency, cfg.LeaseTTL)
 	return a, nil
 }
 

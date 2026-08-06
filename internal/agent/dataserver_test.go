@@ -29,7 +29,7 @@ func newTestDataServer(t *testing.T) *DataServer {
 		t.Fatalf("NewFilePieceStore: %v", err)
 	}
 	topo := &fakeTopology{addrs: nil}
-	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{}, nil, "me", 2)
+	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{}, nil, "me", 2, 30*time.Second)
 	return NewDataServer("me", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
 }
 
