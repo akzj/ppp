@@ -25,13 +25,36 @@ type Source interface {
 func NewSource(typ pppv1.Source_Type) (Source, error) {
 	switch typ {
 	case pppv1.Source_HTTP, pppv1.Source_HTTPS:
-		return &httpSource{client: &http.Client{Timeout: 60 * time.Second}}, nil
+		return &httpSource{client: newHTTPClient()}, nil
 	case pppv1.Source_OSS, pppv1.Source_S3:
 		return nil, fmt.Errorf("%w: %s", ErrSourceNotImplemented, typ)
 	case pppv1.Source_TYPE_UNSPECIFIED:
 		return nil, errors.New("agent: source type unspecified")
 	default:
 		return nil, fmt.Errorf("agent: unknown source type %v", typ)
+	}
+}
+
+// newHTTPClient returns the HTTP client used for source fetches.
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: 60 * time.Second}
+}
+
+// dispatchSource is the agent's default Source: it dispatches every fetch on
+// the source type carried by the tree/job Source message. HTTP/HTTPS are
+// implemented in phase 2; OSS/S3 arrive in phase 4.
+type dispatchSource struct {
+	http *httpSource
+}
+
+func (d *dispatchSource) FetchPiece(ctx context.Context, src *pppv1.Source, treeID, filename string, index, size, pieceSize int64) ([]byte, error) {
+	switch src.GetType() {
+	case pppv1.Source_HTTP, pppv1.Source_HTTPS:
+		return d.http.FetchPiece(ctx, src, treeID, filename, index, size, pieceSize)
+	case pppv1.Source_OSS, pppv1.Source_S3:
+		return nil, fmt.Errorf("%w: %s", ErrSourceNotImplemented, src.GetType())
+	default:
+		return nil, fmt.Errorf("agent: source type %v not supported", src.GetType())
 	}
 }
 

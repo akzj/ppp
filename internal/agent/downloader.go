@@ -171,16 +171,16 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 	return d.store.Get(d.treeID, d.filename, index)
 }
 
-// Progress returns the approximate downloaded bytes, total size and whether
-// the file is complete.
-func (d *Downloader) Progress() (downloaded int64, size int64, complete bool) {
+// Progress returns the approximate downloaded bytes, total size, completion
+// state and any terminal file error (e.g. banned).
+func (d *Downloader) Progress() (downloaded int64, size int64, complete bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	n := int64(d.store.PieceCount(d.treeID, d.filename)) * PieceSize
 	if n > d.size {
 		n = d.size
 	}
-	return n, d.size, d.complete
+	return n, d.size, d.complete, d.fileErr
 }
 
 // stop cancels the downloader and fails all waiters. Used on file ban or
@@ -463,7 +463,13 @@ func (p *peerPool) client(addr string) (pppv1.DataClient, error) {
 	if c, ok := p.clients[addr]; ok {
 		return c, nil
 	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxGRPCMessageSize),
+			grpc.MaxCallSendMsgSize(maxGRPCMessageSize),
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("agent: dial peer %s: %w", addr, err)
 	}
@@ -560,6 +566,16 @@ func (m *DownloaderManager) WakeAll() {
 	defer m.mu.Unlock()
 	for _, d := range m.files {
 		d.Ensure(0)
+	}
+}
+
+// CancelAll stops every downloader (agent shutdown).
+func (m *DownloaderManager) CancelAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, d := range m.files {
+		delete(m.files, key)
+		d.stop(errors.New("agent: stopping"))
 	}
 }
 

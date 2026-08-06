@@ -1,10 +1,36 @@
-// Command ppp-service is the data-plane node of ppp.
-// Phase 0: placeholder only; the gRPC Data service is implemented in a later
-// phase.
+// Command ppp-service is the ppp edge data node. It registers with the
+// control plane, serves the Data gRPC service (GetPiece/DownloadFile/
+// Subscribe/Unsubscribe) and downloads files from the source or upstream
+// peers into a local piece store.
 package main
 
-import "log"
+import (
+	"context"
+	"flag"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/akzj/ppp/internal/agent"
+)
 
 func main() {
-	log.Println("ppp-service: placeholder, data plane not yet implemented")
+	cfg := agent.DefaultConfig()
+	cfg.RegisterFlags(flag.CommandLine)
+	flag.Parse()
+
+	a, err := agent.NewAgent(cfg)
+	if err != nil {
+		log.Fatalf("ppp-service: %v", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := a.Start(ctx); err != nil {
+		log.Fatalf("ppp-service: %v", err)
+	}
+	log.Printf("ppp-service %s started: addr=%s tree=%s role=%s", a.NodeID(), a.Addr(), cfg.Tree, cfg.Role)
+	<-ctx.Done()
+	a.Stop()
+	log.Printf("ppp-service %s stopped", a.NodeID())
 }

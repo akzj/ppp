@@ -18,6 +18,11 @@ import (
 // same value so piece indices and offsets are interchangeable.
 const PieceSize int64 = 4 << 20 // 4 MiB
 
+// maxGRPCMessageSize is the gRPC message limit for the Data plane. A full
+// piece plus protobuf framing exceeds gRPC's 4 MiB default, so both the Data
+// server and the peer client must raise it (headroom for future larger pieces).
+const maxGRPCMessageSize = 16 << 20 // 16 MiB
+
 // Config holds ppp-service runtime settings.
 type Config struct {
 	// ID is the node id registered with the control plane. Empty means the
