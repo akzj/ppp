@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"sync"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
@@ -68,4 +69,18 @@ func (b *BannedList) Generation() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.gen
+}
+
+// Snapshot returns the generation and the full list for local persistence.
+func (b *BannedList) Snapshot() (int64, []*pppv1.BannedFile) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	files := make([]*pppv1.BannedFile, 0, len(b.files))
+	for k := range b.files {
+		parts := strings.SplitN(k, "\x00", 2)
+		if len(parts) == 2 {
+			files = append(files, &pppv1.BannedFile{TreeId: parts[0], Filename: parts[1]})
+		}
+	}
+	return b.gen, files
 }

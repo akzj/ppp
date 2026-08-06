@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -10,6 +11,8 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // watchRetryDelay is how long a watch loop waits before reconnecting.
@@ -37,23 +40,34 @@ type Agent struct {
 	topologyGen    int64
 	topoCancel     context.CancelFunc
 	bannedCancel   context.CancelFunc
+	bannedDisk     *bannedDiskStore
 
 	closeOnce sync.Once
 }
 
-// NewAgent builds the agent from the (already finalized) config.
+// NewAgent builds the agent from the (already finalized) config. The locally
+// persisted banned list is loaded immediately so a restarted node keeps
+// rejecting banned files during the restart window, before the ctl sync.
 func NewAgent(cfg *Config) (*Agent, error) {
 	store, err := NewFilePieceStore(cfg.DownloadPath)
 	if err != nil {
 		return nil, err
 	}
+	bannedDisk, err := openBannedDiskStore(cfg.DownloadPath)
+	if err != nil {
+		return nil, err
+	}
 	a := &Agent{
-		cfg:    cfg,
-		store:  store,
-		banned: NewBannedList(),
-		leases: NewLeaseManager(cfg.LeaseTTL),
-		source: &dispatchSource{http: &httpSource{client: newHTTPClient()}},
-		nodeID: cfg.ID,
+		cfg:        cfg,
+		store:      store,
+		banned:     NewBannedList(),
+		leases:     NewLeaseManager(cfg.LeaseTTL),
+		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}},
+		bannedDisk: bannedDisk,
+		nodeID:     cfg.ID,
+	}
+	if gen, files, err := bannedDisk.Load(); err == nil {
+		a.banned.ApplyInitial(gen, files)
 	}
 	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency)
 	return a, nil
@@ -95,7 +109,17 @@ func (a *Agent) Start(ctx context.Context) error {
 		return err
 	}
 	a.applyTopology(reg.GetTopology())
-	a.banned.ApplyInitial(0, reg.GetBanned())
+	a.mu.Lock()
+	// P2-8: initialize the topology generation from the register response so
+	// the first heartbeat does not trigger a spurious resync.
+	a.topologyGen = reg.GetTopology().GetGeneration()
+	a.mu.Unlock()
+	// The banned list has no generation in the register response; the
+	// authoritative gen + list come from the sync right after registration.
+	a.applyBannedSnapshot(0, reg.GetBanned())
+	if resp, err := a.ctl.SyncBannedList(ctx, a.cfg.Tree); err == nil {
+		a.applyBannedSnapshot(resp.GetGeneration(), resp.GetBanned())
+	}
 	a.setTreeSource(reg.GetTree().GetSource())
 
 	go a.watchTopologyLoop(ctx)
@@ -110,7 +134,7 @@ func (a *Agent) Start(ctx context.Context) error {
 }
 
 // Stop shuts down the Data service, cancels downloaders and closes the ctl
-// connection. Idempotent.
+// connection and the local banned store. Idempotent.
 func (a *Agent) Stop() {
 	a.closeOnce.Do(func() {
 		a.dm.CancelAll()
@@ -119,6 +143,9 @@ func (a *Agent) Stop() {
 		}
 		if a.ctl != nil {
 			_ = a.ctl.Close()
+		}
+		if a.bannedDisk != nil {
+			_ = a.bannedDisk.Close()
 		}
 		a.dm.Close()
 	})
@@ -191,6 +218,14 @@ func (a *Agent) watchTopologyLoop(ctx context.Context) {
 		for {
 			up, err := stream.Recv()
 			if err != nil {
+				// P2-7: when the tree is gone (clean close / not found), clear
+				// local upstreams so we stop fetching; the banned list stays.
+				if errors.Is(err, io.EOF) || status.Code(err) == codes.NotFound {
+					a.applyTopology(&pppv1.Topology{TreeId: a.cfg.Tree})
+					a.mu.Lock()
+					a.topologyGen = 0
+					a.mu.Unlock()
+				}
 				break
 			}
 			a.applyTopology(up.GetTopology())
@@ -199,6 +234,10 @@ func (a *Agent) watchTopologyLoop(ctx context.Context) {
 			a.mu.Unlock()
 		}
 		streamCancel()
+		// P2-7: avoid a hot reconnect loop on persistent Recv errors.
+		if !sleepCtx(ctx, watchRetryDelay) {
+			return
+		}
 	}
 }
 
@@ -231,14 +270,42 @@ func (a *Agent) watchBannedLoop(ctx context.Context) {
 			if err != nil {
 				break
 			}
-			a.banned.ApplyUpdate(up)
-			a.cancelBannedDownloaders(up)
+			a.applyBannedUpdate(up)
 		}
 		streamCancel()
+		// P2-7: avoid a hot reconnect loop on persistent Recv errors.
+		if !sleepCtx(ctx, watchRetryDelay) {
+			return
+		}
 	}
 }
 
-// cancelBannedDownloaders stops downloaders for files banned by an update.
+// applyBannedSnapshot replaces the banned list (authoritative), persists it
+// locally and reacts (stop downloaders, remove local pieces).
+func (a *Agent) applyBannedSnapshot(gen int64, banned []*pppv1.BannedFile) {
+	a.banned.ApplyInitial(gen, banned)
+	a.persistBanned()
+	a.cancelBannedDownloaders(&pppv1.BannedListUpdate{FullSnapshot: true, Snapshot: banned})
+}
+
+// applyBannedUpdate applies an incremental update, persists it locally and
+// reacts.
+func (a *Agent) applyBannedUpdate(up *pppv1.BannedListUpdate) {
+	a.banned.ApplyUpdate(up)
+	a.persistBanned()
+	a.cancelBannedDownloaders(up)
+}
+
+// persistBanned writes the current banned list to the local store.
+func (a *Agent) persistBanned() {
+	gen, files := a.banned.Snapshot()
+	if err := a.bannedDisk.Save(gen, files); err != nil {
+		log.Printf("agent %s: persist banned: %v", a.nodeID, err)
+	}
+}
+
+// cancelBannedDownloaders stops downloaders for files banned by an update and
+// removes their local pieces.
 func (a *Agent) cancelBannedDownloaders(up *pppv1.BannedListUpdate) {
 	var files []*pppv1.BannedFile
 	if up.GetFullSnapshot() {
@@ -248,6 +315,9 @@ func (a *Agent) cancelBannedDownloaders(up *pppv1.BannedListUpdate) {
 	}
 	for _, f := range files {
 		a.dm.CancelFile(f.GetTreeId(), f.GetFilename())
+		// P2-6: a banned file's local pieces are removed. Retention for files
+		// still needed by other jobs is deferred to phase 4.
+		_ = a.store.Delete(f.GetTreeId(), f.GetFilename())
 	}
 }
 
@@ -291,6 +361,10 @@ func (a *Agent) watchJobsLoop(ctx context.Context) {
 					Source:   job.GetSource(),
 				}).markJobNeed()
 			}
+		}
+		// P2-7: avoid a hot reconnect loop on persistent Recv errors.
+		if !sleepCtx(ctx, watchRetryDelay) {
+			return
 		}
 	}
 }
@@ -356,8 +430,7 @@ func (a *Agent) resyncBanned() {
 		log.Printf("agent %s: sync banned: %v", a.nodeID, err)
 		return
 	}
-	a.banned.ApplyInitial(resp.GetGeneration(), resp.GetBanned())
-	a.cancelBannedDownloaders(&pppv1.BannedListUpdate{FullSnapshot: true, Snapshot: resp.GetBanned()})
+	a.applyBannedSnapshot(resp.GetGeneration(), resp.GetBanned())
 	a.forceBannedResync()
 }
 
