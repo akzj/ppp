@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"go.etcd.io/bbolt"
@@ -57,7 +58,16 @@ type mmapFile struct {
 	// present maps a piece index to its info for in-progress files (nil in
 	// complete mode, where every piece exists by construction).
 	present map[int64]*pppv1.PieceInfo
+	// accessTS is the last completed-file access; idle completed files are
+	// evicted from the open cache to bound address-space usage.
+	accessTS time.Time
 }
+
+// completeIdleTTL evicts completed (read-only) mmaps from the open cache after
+// this idle period, so long-lived agents do not accumulate mappings for every
+// file they ever touched. In-progress files stay open while the downloader is
+// active. A var so tests can lower it.
+var completeIdleTTL = 60 * time.Second
 
 var bucketPieces = []byte("pieces")
 
@@ -92,10 +102,32 @@ func mmapKey(index int64) []byte {
 	return buf[:]
 }
 
+// evictIdleLocked closes completed files idle beyond completeIdleTTL and drops
+// them from the open cache (reopened on demand). Opportunistically run when a
+// file is opened or completed. Must hold the store mutex.
+func (s *mmapPieceStore) evictIdleLocked(now time.Time) {
+	for key, f := range s.open {
+		if f.complete && now.Sub(f.accessTS) > completeIdleTTL {
+			_ = f.closeLocked()
+			delete(s.open, key)
+		}
+	}
+}
+
+// touchLocked refreshes a completed file's access time. Must hold the store
+// mutex (or the caller must otherwise serialize with the eviction sweep).
+func (f *mmapFile) touchLocked(now time.Time) {
+	if f.complete {
+		f.accessTS = now
+	}
+}
+
 func (s *mmapPieceStore) openLocked(key, treeID, filename string) (*mmapFile, error) {
 	if f, ok := s.open[key]; ok {
+		f.touchLocked(time.Now())
 		return f, nil
 	}
+	s.evictIdleLocked(time.Now())
 	treeDir, base, piecesPath, indexPath, completePath := mmapFilePaths(s.dir, treeID, filename)
 	f := &mmapFile{
 		treeID: treeID, filename: filename,
@@ -123,6 +155,7 @@ func (s *mmapPieceStore) openLocked(key, treeID, filename string) (*mmapFile, er
 				return nil, err
 			}
 		}
+		f.accessTS = time.Now()
 		s.open[key] = f
 		return f, nil
 	}
@@ -178,6 +211,7 @@ func (s *mmapPieceStore) openLocked(key, treeID, filename string) (*mmapFile, er
 		db.Close()
 		return nil, err
 	}
+	f.accessTS = time.Now()
 	s.open[key] = f
 	return f, nil
 }
@@ -385,9 +419,9 @@ func (s *mmapPieceStore) MarkComplete(treeID, filename string, size int64) error
 	if err := f.closeLocked(); err != nil {
 		return err
 	}
-	if f.db == nil {
-		_ = os.Remove(f.indexPath)
-	}
+	// The index is no longer needed once the file is finalized (closeLocked
+	// already closed it).
+	_ = os.Remove(f.indexPath)
 	// Make the pieces file exactly the authoritative size before renaming.
 	if size != f.size {
 		if err := os.Truncate(f.piecesPath, size); err != nil {

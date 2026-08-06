@@ -63,7 +63,7 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		store:      store,
 		banned:     NewBannedList(),
 		leases:     NewLeaseManager(cfg.LeaseTTL),
-		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}, s3: &s3Source{}},
+		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}, s3: newS3Source()},
 		bannedDisk: bannedDisk,
 		nodeID:     cfg.ID,
 	}
@@ -159,6 +159,14 @@ func (a *Agent) Stop() {
 		}
 		if a.bannedDisk != nil {
 			_ = a.bannedDisk.Close()
+		}
+		// Close the piece store: the mmap implementation must release its
+		// mappings/handles or long-lived agents (and repeated test runs) leak
+		// address space until ENOMEM.
+		if a.store != nil {
+			if err := a.store.Close(); err != nil {
+				log.Printf("agent %s: close piece store: %v", a.nodeID, err)
+			}
 		}
 		a.dm.Close()
 	})
@@ -309,12 +317,11 @@ func (a *Agent) applyBannedUpdate(up *pppv1.BannedListUpdate) {
 	a.cancelBannedDownloaders(up)
 }
 
-// persistBanned writes the current banned list to the local store.
+// persistBanned schedules a coalesced write of the current banned list to the
+// local store (Save never fails; Close flushes synchronously).
 func (a *Agent) persistBanned() {
 	gen, files := a.banned.Snapshot()
-	if err := a.bannedDisk.Save(gen, files); err != nil {
-		log.Printf("agent %s: persist banned: %v", a.nodeID, err)
-	}
+	a.bannedDisk.Save(gen, files)
 }
 
 // cancelBannedDownloaders stops downloaders for files banned by an update and

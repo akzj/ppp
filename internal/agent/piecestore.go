@@ -31,6 +31,9 @@ type PieceStore interface {
 	PieceCount(treeID, filename string) int
 	// Delete removes every piece and the completion marker of a file.
 	Delete(treeID, filename string) error
+	// Close releases any underlying resources (mmaps, handles). It is a no-op
+	// for stateless implementations. Call at agent shutdown.
+	Close() error
 }
 
 // filePieceStore is a simple on-disk PieceStore: pieces live as
@@ -133,3 +136,6 @@ func (s *filePieceStore) PieceCount(treeID, filename string) int {
 func (s *filePieceStore) Delete(treeID, filename string) error {
 	return os.RemoveAll(s.fileDir(treeID, filename))
 }
+
+// Close is a no-op for the file store: it holds no long-lived handles.
+func (s *filePieceStore) Close() error { return nil }

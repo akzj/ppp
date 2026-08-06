@@ -31,7 +31,7 @@ func NewSource(typ pppv1.Source_Type) (Source, error) {
 	case pppv1.Source_HTTP, pppv1.Source_HTTPS:
 		return &httpSource{client: newHTTPClient()}, nil
 	case pppv1.Source_OSS, pppv1.Source_S3:
-		return &s3Source{}, nil
+		return newS3Source(), nil
 	case pppv1.Source_TYPE_UNSPECIFIED:
 		return nil, errors.New("agent: source type unspecified")
 	default:
@@ -49,19 +49,35 @@ func NewSource(typ pppv1.Source_Type) (Source, error) {
 // Bucket/Key come from Source.bucket/Source.key. Credentials come from the
 // environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY); region from
 // Source.region or the environment.
+// s3Source fetches pieces from S3-compatible object storage through the AWS
+// SDK v2. It keeps one client per (region, base endpoint) so jobs/trees with
+// different regions each use a correctly configured client.
 type s3Source struct {
-	mu       sync.Mutex
-	client   *s3.Client
-	built    bool
-	buildErr error
+	mu      sync.Mutex
+	clients map[string]*s3.Client
+	errs    map[string]error
 }
 
-// clientFor lazily builds the S3 client (once) from the source configuration.
+// newS3Source creates an empty S3 source.
+func newS3Source() *s3Source {
+	return &s3Source{clients: make(map[string]*s3.Client), errs: make(map[string]error)}
+}
+
+// clientFor returns (building once per region + base endpoint) the S3 client
+// for the source.
 func (s *s3Source) clientFor(src *pppv1.Source) (*s3.Client, error) {
+	endpoint := ""
+	if len(src.GetUrls()) > 0 {
+		endpoint = src.GetUrls()[0]
+	}
+	key := src.GetRegion() + "\x00" + endpoint
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.built {
-		return s.client, s.buildErr
+	if c, ok := s.clients[key]; ok {
+		return c, nil
+	}
+	if err, ok := s.errs[key]; ok {
+		return nil, err
 	}
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if region := src.GetRegion(); region != "" {
@@ -69,11 +85,10 @@ func (s *s3Source) clientFor(src *pppv1.Source) (*s3.Client, error) {
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), opts...)
 	if err != nil {
-		s.built = true
-		s.buildErr = err
+		s.errs[key] = err
 		return nil, err
 	}
-	s.client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+	c := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		// Path-style addressing works with OSS/MinIO/S3-compatible stores and
 		// the test endpoint.
 		o.UsePathStyle = true
@@ -81,8 +96,8 @@ func (s *s3Source) clientFor(src *pppv1.Source) (*s3.Client, error) {
 		// only when required avoids noisy warnings.
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
-	s.built = true
-	return s.client, nil
+	s.clients[key] = c
+	return c, nil
 }
 
 // s3GetTimeout bounds each GetObject call.

@@ -73,8 +73,9 @@ func (b *bannedDiskStore) Close() error {
 }
 
 // Save records the latest snapshot and schedules a coalesced flush. Multiple
-// saves within bannedSaveWindow collapse into a single full rewrite.
-func (b *bannedDiskStore) Save(gen int64, files []*pppv1.BannedFile) error {
+// saves within bannedSaveWindow collapse into a single full rewrite. It never
+// fails: the write happens asynchronously (or synchronously in Close).
+func (b *bannedDiskStore) Save(gen int64, files []*pppv1.BannedFile) {
 	b.mu.Lock()
 	b.gen, b.files = gen, files
 	if !b.pending && !b.closed {
@@ -82,7 +83,6 @@ func (b *bannedDiskStore) Save(gen int64, files []*pppv1.BannedFile) error {
 		b.timer = time.AfterFunc(bannedSaveWindow, b.flush)
 	}
 	b.mu.Unlock()
-	return nil
 }
 
 // flush writes the latest pending snapshot (called from the debounce timer).
