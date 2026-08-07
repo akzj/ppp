@@ -172,6 +172,62 @@ A 4 MiB piece plus protobuf framing exceeds gRPC's 4 MiB default limit. The Data
 server and peer/test clients set a 16 MiB max message size. Custom clients must do
 the same.
 
+## TLS / mTLS
+
+All gRPC links can be protected with mutual TLS (phase 8): ctl ↔ service (control plane),
+service ↔ service (piece fetch / subscribe) and the orchestrator/leaf client. This phase does
+**CA mutual verification** — every endpoint verifies the peer's certificate against the configured
+CA. Identity-based authorization (which node may do what) is a later concern.
+
+**Flags** (both binaries accept the same four):
+
+| Flag | Meaning |
+|------|---------|
+| `-tls-ca` | CA certificate file (PEM). Trust anchor for peers and client-CA for servers. |
+| `-tls-cert` | This node's certificate (PEM). |
+| `-tls-key` | This node's private key (PEM). |
+| `-tls-server-name` | The name a **client** verifies on the server certificate (agent only; the ctl only serves). |
+
+When all TLS flags are empty the link stays **plaintext** (development compatibility; nothing
+changes for existing deployments). Setting `-tls-ca` alone with `-tls-cert/-tls-key` enables mTLS.
+
+**Topology:** the ctl server requires and verifies a client certificate; every `ppp-service`
+presents its certificate to the ctl and to its peers, and verifies the ctl/peer server name
+(`-tls-server-name`, e.g. the certificate CN/SAN). Orchestrator/leaf clients present their own
+certificate and verify the service they dial. The `/leader` HTTP health endpoint stays plaintext
+(it only returns 200/503 for an LB/VIP).
+
+**Generating certificates** (example with openssl; the tests generate an in-memory PKI with
+crypto/x509 + ECDSA):
+
+```sh
+# CA
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout ca.key -out ca.pem \
+  -days 365 -nodes -subj "/CN=ppp-ca" -addext "basicConstraints=critical,CA:TRUE"
+
+# ctl server cert (ServerAuth, SAN localhost/127.0.0.1)
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout ctl.key -out ctl.csr -nodes \
+  -subj "/CN=ppp-ctl"
+openssl x509 -req -in ctl.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ctl.pem -days 365 \
+  -extfile <(printf "extendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1")
+
+# node cert (ServerAuth + ClientAuth, SAN localhost/127.0.0.1)
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout node.key -out node.csr -nodes \
+  -subj "/CN=ppp-node"
+openssl x509 -req -in node.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out node.pem -days 365 \
+  -extfile <(printf "extendedKeyUsage=serverAuth,clientAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1")
+
+# orchestrator client cert (ClientAuth)
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout orch.key -out orch.csr -nodes \
+  -subj "/CN=ppp-orch"
+openssl x509 -req -in orch.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out orch.pem -days 365 \
+  -extfile <(printf "extendedKeyUsage=clientAuth")
+```
+
+Run the ctl with `-tls-ca ca.pem -tls-cert ctl.pem -tls-key ctl.key`; run each service with
+`-tls-ca ca.pem -tls-cert node.pem -tls-key node.key -tls-server-name localhost`; orchestrator
+clients connect with the CA + their client cert and verify `localhost`.
+
 ## Memory and CI notes
 
 - The test suite is green with `go test ./...` and
