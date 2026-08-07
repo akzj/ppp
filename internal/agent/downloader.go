@@ -556,6 +556,20 @@ func (d *Downloader) fetchPiece(index int64) {
 		}
 		data, err = d.fetchOnce(index)
 		if err == nil {
+			// Single-pass boundary validation (§4.2): every piece except the
+			// last is exactly PieceSize; the last is the remainder. A source
+			// that changed mid-pull (or a misbehaving peer) yields a
+			// wrong-length piece, which fails the build instead of silently
+			// mixing content versions.
+			want := d.size - index*PieceSize
+			if want > PieceSize {
+				want = PieceSize
+			}
+			if int64(len(data)) != want {
+				err = fmt.Errorf("agent: piece %d length %d != expected %d (source changed?)", index, len(data), want)
+			}
+		}
+		if err == nil {
 			break
 		}
 		if errors.Is(err, errFileBanned) {
@@ -909,6 +923,29 @@ func (m *DownloaderManager) Ensure(need FileNeed) *Downloader {
 	}
 	d.Ensure(need.Size)
 	return d
+}
+
+// Build isolation (§4.1): the manager keeps exactly ONE downloader per
+// (tree, filename) key, so concurrent triggers for the same filename (even
+// from different jobs) share that downloader — the store serializes the
+// piece writes and the artifact is content-identical, so no two jobs can
+// double-write or overwrite each other's staging. This simpler scheme (a
+// shared downloader + the store mutex + an atomic Seal) satisfies the
+// "different jobs, same filename must not destroy each other" requirement;
+// per-Job staging directories are not needed because the shared downloader
+// IS the build mutual exclusion (later arrivals reuse/wait).
+
+// IsBuilding reports whether an unsealed downloader is actively fetching (the
+// BUILDING state, §3.4): a root must not serve such files (NOT_READY) and a
+// GetPiece must not re-trigger their build.
+func (m *DownloaderManager) IsBuilding(treeID, filename string) bool {
+	d := m.Get(treeID, filename)
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.running && !d.complete && d.fileErr == nil
 }
 
 // Get returns the active downloader for a file, or nil.
