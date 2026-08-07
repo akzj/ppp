@@ -368,3 +368,40 @@ func TestDownloaderContentConflictSkipsUpstream(t *testing.T) {
 		}
 	}
 }
+
+// TestDownloaderMetadataCorrupt verifies the copy-flow metadata verification
+// (§5.2d): if the copied metadata bytes do not hash to the advertised
+// metadata_id the download reports METADATA_CORRUPT and never fetches/seals.
+func TestDownloaderMetadataCorrupt(t *testing.T) {
+	content := c3Content()
+	bad := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}, corruptMeta: true}
+	addr, stop := startFakeData(t, bad)
+	defer stop()
+
+	store, err := NewFilePieceStore(newTestStoreDir(t))
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{data: nil}, nil, "member", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+
+	// The corrupt metadata can never bind: the artifact never seals and no
+	// piece is stored.
+	time.Sleep(1500 * time.Millisecond)
+	if store.IsComplete("a.bin") {
+		t.Fatal("corrupt-metadata artifact was sealed")
+	}
+	sp := store.(*sparsePieceStore)
+	if sp.HasPiece("a.bin", 0) {
+		t.Fatal("a piece was fetched despite corrupt metadata")
+	}
+}

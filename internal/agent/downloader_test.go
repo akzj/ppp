@@ -49,6 +49,9 @@ type fakeDataServer struct {
 	// diffMetaID serves a GetPiece whose artifact metadata_id differs from the
 	// one served by GetFileInfo (a content conflict, §5.3).
 	diffMetaID bool
+	// corruptMeta serves GetMetadata bytes whose SHA-256 does not match the
+	// metadata_id advertised by GetFileInfo (a corrupt metadata copy).
+	corruptMeta bool
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -130,6 +133,9 @@ func (f *fakeDataServer) GetMetadata(req *pppv1.GetMetadataRequest, stream pppv1
 	}
 	if len(req.GetMetadataId()) > 0 && !bytes.Equal(req.GetMetadataId(), info.GetMetadataId()) {
 		return status.Error(codes.FailedPrecondition, "content conflict: metadata_id mismatch")
+	}
+	if f.corruptMeta {
+		metaBytes = append(append([]byte{}, metaBytes...), 0x00) // wrong bytes
 	}
 	return stream.Send(&pppv1.MetadataChunk{MetadataId: info.GetMetadataId(), Offset: 0, Data: metaBytes})
 }
