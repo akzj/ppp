@@ -390,6 +390,52 @@ func (s *sparsePieceStore) openCompleteLocked(f *sparseFile) (*sparseFile, error
 	}, nil
 }
 
+// ============ metadata sidecar ============
+//
+// The file-distribution core stores the sealed artifact metadata as a
+// compact sidecar next to the final file: <basename>.cds.metadata. It is
+// keyed by basename (the .cds. marker is reserved, so a metadata filename can
+// never collide with a user basename). The sidecar is immutable once written;
+// the .cds.commit marker that makes it authoritative is deferred to C2.
+
+// metadataSidecarExt is the sidecar file suffix.
+const metadataSidecarExt = ".cds.metadata"
+
+// WriteMetadata writes the metadata sidecar for a file.
+func (s *sparsePieceStore) WriteMetadata(filename string, data []byte) error {
+	if !validBasename(filename) {
+		return errors.New("agent: invalid filename")
+	}
+	return os.WriteFile(filepath.Join(s.dir, filename+metadataSidecarExt), data, 0o644)
+}
+
+// ReadMetadata returns the metadata sidecar for a file (ok=false when absent).
+func (s *sparsePieceStore) ReadMetadata(filename string) ([]byte, bool, error) {
+	if !validBasename(filename) {
+		return nil, false, errors.New("agent: invalid filename")
+	}
+	data, err := os.ReadFile(filepath.Join(s.dir, filename+metadataSidecarExt))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+// DeleteMetadata removes the metadata sidecar for a file.
+func (s *sparsePieceStore) DeleteMetadata(filename string) error {
+	if !validBasename(filename) {
+		return errors.New("agent: invalid filename")
+	}
+	err := os.Remove(filepath.Join(s.dir, filename+metadataSidecarExt))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Delete removes every on-disk artifact of a file (and any cached state).
 func (s *sparsePieceStore) Delete(filename string) error {
 	if !validBasename(filename) {
