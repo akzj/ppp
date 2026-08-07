@@ -242,6 +242,24 @@ func TestCreateJobRejectsBanned(t *testing.T) {
 	}
 }
 
+// TestCreateJobRejectsUnsafeFilename verifies CreateJob rejects filenames that
+// are not safe basenames, including the reserved ".cds." marker (the agent's
+// sparse-store internal files would collide with such names).
+func TestCreateJobRejectsUnsafeFilename(t *testing.T) {
+	srv := newTestServer(t)
+	createTree(t, srv, "t1", 3)
+	for _, name := range []string{"a/b.bin", "..", ".", "/abs", "foo.cds.pieces", "foo.cds.index", "a.cds.b"} {
+		_, err := srv.CreateJob(context.Background(), &pppv1.CreateJobRequest{TreeId: "t1", Filename: name})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("CreateJob(%q) code = %v, want InvalidArgument", name, status.Code(err))
+		}
+	}
+	// A normal name still works.
+	if _, err := srv.CreateJob(context.Background(), &pppv1.CreateJobRequest{TreeId: "t1", Filename: "app.tar", Size: 100}); err != nil {
+		t.Fatalf("CreateJob(normal) = %v, want nil", err)
+	}
+}
+
 // TestCancelJobAndUnban verifies the cancel/unban state transitions via direct
 // server calls.
 func TestCancelJobAndUnban(t *testing.T) {

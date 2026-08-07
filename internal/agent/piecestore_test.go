@@ -75,15 +75,16 @@ func TestPieceStoreCompleteMarker(t *testing.T) {
 // TestPieceStorePathTraversal verifies hostile names cannot escape the
 // download path.
 // TestValidBasename verifies the basename rule: unsafe names (path
-// separators, ".", "..", empty) are rejected.
+// separators, ".", "..", empty) and the reserved ".cds." marker are rejected.
 func TestValidBasename(t *testing.T) {
-	bad := []string{"", ".", "..", "a/b", "a\\b", "/abs", "abs/", "dir/file.bin"}
+	bad := []string{"", ".", "..", "a/b", "a\\b", "/abs", "abs/", "dir/file.bin",
+		"foo.cds.pieces", "foo.cds.index", "a.cds.b"}
 	for _, name := range bad {
 		if validBasename(name) {
 			t.Errorf("validBasename(%q) = true, want false", name)
 		}
 	}
-	good := []string{"a.bin", "app.tar", "file", "with spaces.bin", "a-b_c.txt"}
+	good := []string{"a.bin", "app.tar", "file", "with spaces.bin", "a-b_c.txt", "foo.cdspieces"}
 	for _, name := range good {
 		if !validBasename(name) {
 			t.Errorf("validBasename(%q) = false, want true", name)
@@ -95,18 +96,19 @@ func TestValidBasename(t *testing.T) {
 // store (defense in depth beyond the data-plane entry validation).
 func TestPieceStoreRejectsUnsafeNames(t *testing.T) {
 	for _, st := range []PieceStore{mustFileStore(t), mustMmapStore(t)} {
-		evil := "../../../../etc/passwd"
-		if err := st.Put(evil, 0, []byte("x")); err == nil {
-			t.Fatalf("Put(%q) = nil, want rejection", evil)
-		}
-		if st.HasPiece(evil, 0) {
-			t.Fatalf("HasPiece(%q) = true, want false", evil)
-		}
-		if st.IsComplete(evil) {
-			t.Fatalf("IsComplete(%q) = true, want false", evil)
-		}
-		if _, err := st.Get(evil, 0); err == nil {
-			t.Fatalf("Get(%q) = nil error, want rejection", evil)
+		for _, evil := range []string{"../../../../etc/passwd", "foo.cds.pieces", "foo.cds.index"} {
+			if err := st.Put(evil, 0, []byte("x")); err == nil {
+				t.Fatalf("Put(%q) = nil, want rejection", evil)
+			}
+			if st.HasPiece(evil, 0) {
+				t.Fatalf("HasPiece(%q) = true, want false", evil)
+			}
+			if st.IsComplete(evil) {
+				t.Fatalf("IsComplete(%q) = true, want false", evil)
+			}
+			if _, err := st.Get(evil, 0); err == nil {
+				t.Fatalf("Get(%q) = nil error, want rejection", evil)
+			}
 		}
 	}
 }
