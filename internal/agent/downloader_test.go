@@ -183,7 +183,7 @@ func newTestManager(t *testing.T, topo *fakeTopology, src Source) (*DownloaderMa
 	if src == nil {
 		src = &fakeSource{data: []byte("x")}
 	}
-	dm := NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4, 30*time.Second)
+	dm := NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4, 30*time.Second, nil)
 	// Cleanup order (LIFO): stop the downloaders first (so no goroutine can
 	// create store files), then close the store's bbolt handles, then let the
 	// removal run on an empty directory.

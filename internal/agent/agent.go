@@ -12,8 +12,10 @@ import (
 	"time"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
+	"github.com/akzj/ppp/internal/tlsutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -35,6 +37,11 @@ type Agent struct {
 	nodeID string
 	addr   string
 	grpc   *grpc.Server
+
+	// mTLS credentials (nil = plaintext). serverCreds protects the Data
+	// service; clientCreds is used for the ctl and peer connections.
+	serverCreds credentials.TransportCredentials
+	clientCreds credentials.TransportCredentials
 
 	mu             sync.Mutex
 	upstreamAddrs  []string
@@ -59,19 +66,30 @@ func NewAgent(cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// mTLS when configured; all TLS flags empty -> nil (plaintext).
+	serverCreds, err := tlsutil.LoadServerCredentials(cfg.TLSCA, cfg.TLSCert, cfg.TLSKey)
+	if err != nil {
+		return nil, err
+	}
+	clientCreds, err := tlsutil.LoadClientCredentials(cfg.TLSCA, cfg.TLSCert, cfg.TLSKey, cfg.TLSServerName)
+	if err != nil {
+		return nil, err
+	}
 	a := &Agent{
-		cfg:        cfg,
-		store:      store,
-		banned:     NewBannedList(),
-		leases:     NewLeaseManager(cfg.LeaseTTL),
-		source:     &dispatchSource{http: &httpSource{client: newHTTPClient()}, s3: newS3Source()},
-		bannedDisk: bannedDisk,
-		nodeID:     cfg.ID,
+		cfg:         cfg,
+		store:       store,
+		banned:      NewBannedList(),
+		leases:      NewLeaseManager(cfg.LeaseTTL),
+		source:      &dispatchSource{http: &httpSource{client: newHTTPClient()}, s3: newS3Source()},
+		bannedDisk:  bannedDisk,
+		nodeID:      cfg.ID,
+		serverCreds: serverCreds,
+		clientCreds: clientCreds,
 	}
 	if gen, files, err := bannedDisk.Load(); err == nil {
 		a.banned.ApplyInitial(gen, files)
 	}
-	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency, cfg.LeaseTTL)
+	a.dm = NewDownloaderManager(store, a.banned, a, a.source, nil, a.nodeID, cfg.DownloadConcurrency, cfg.LeaseTTL, clientCreds)
 	return a, nil
 }
 
@@ -96,7 +114,7 @@ func (a *Agent) Addr() string { return a.addr }
 // Start dials the ctl, registers, starts the Data gRPC service and launches
 // the background loops.
 func (a *Agent) Start(ctx context.Context) error {
-	cc, err := dialCtl(a.cfg.CtlAddr)
+	cc, err := dialCtl(a.cfg.CtlAddr, a.clientCreds)
 	if err != nil {
 		return err
 	}
@@ -108,10 +126,14 @@ func (a *Agent) Start(ctx context.Context) error {
 		return err
 	}
 	a.addr = lis.Addr().String()
-	a.grpc = grpc.NewServer(
+	serverOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
-	)
+	}
+	if a.serverCreds != nil {
+		serverOpts = append(serverOpts, grpc.Creds(a.serverCreds))
+	}
+	a.grpc = grpc.NewServer(serverOpts...)
 	pppv1.RegisterDataServer(a.grpc, NewDataServer(a.nodeID, a.cfg.Tree, a.cfg.DownloadPath, a.store, a.banned, a.dm, a.leases))
 	go func() { _ = a.grpc.Serve(lis) }()
 

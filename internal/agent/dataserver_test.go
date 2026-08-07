@@ -31,7 +31,7 @@ func newTestDataServer(t *testing.T) *DataServer {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	topo := &fakeTopology{addrs: nil}
-	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{}, nil, "me", 2, 30*time.Second)
+	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{}, nil, "me", 2, 30*time.Second, nil)
 	return NewDataServer("me", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
 }
 

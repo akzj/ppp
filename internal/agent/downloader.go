@@ -10,7 +10,7 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 )
 
 // Fetch tuning for the per-file downloader.
@@ -729,13 +729,15 @@ const peerIdleTimeout = 10 * time.Minute
 
 type peerPool struct {
 	mu       sync.Mutex
+	creds    credentials.TransportCredentials
 	conns    map[string]*grpc.ClientConn
 	clients  map[string]pppv1.DataClient
 	lastUsed map[string]time.Time
 }
 
-func newPeerPool() *peerPool {
+func newPeerPool(creds credentials.TransportCredentials) *peerPool {
 	return &peerPool{
+		creds:    creds,
 		conns:    make(map[string]*grpc.ClientConn),
 		clients:  make(map[string]pppv1.DataClient),
 		lastUsed: make(map[string]time.Time),
@@ -760,7 +762,7 @@ func (p *peerPool) client(addr string) (pppv1.DataClient, error) {
 		return c, nil
 	}
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(credsOrInsecure(p.creds)),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxGRPCMessageSize),
 			grpc.MaxCallSendMsgSize(maxGRPCMessageSize),
@@ -805,14 +807,14 @@ type DownloaderManager struct {
 // NewDownloaderManager creates the manager. treeSource is the tree default
 // source (nil until the register response arrives); leaseTTL is the upstream
 // session-lease duration downloaders request while fetching.
-func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, nodeID string, concurrency int, leaseTTL time.Duration) *DownloaderManager {
+func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, nodeID string, concurrency int, leaseTTL time.Duration, peerCreds credentials.TransportCredentials) *DownloaderManager {
 	return &DownloaderManager{
 		store:       store,
 		banned:      banned,
 		topo:        topo,
 		source:      source,
 		treeSource:  treeSource,
-		peers:       newPeerPool(),
+		peers:       newPeerPool(peerCreds),
 		nodeID:      nodeID,
 		concurrency: concurrency,
 		leaseTTL:    leaseTTL,

@@ -6,6 +6,7 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -15,13 +16,23 @@ type ctlClient struct {
 	client pppv1.ControlClient
 }
 
-// dialCtl connects to the control plane.
-func dialCtl(addr string) (*ctlClient, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// dialCtl connects to the control plane. creds is nil for plaintext (mTLS
+// configured via -tls-ca/-tls-cert/-tls-key/-tls-server-name).
+func dialCtl(addr string, creds credentials.TransportCredentials) (*ctlClient, error) {
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(credsOrInsecure(creds))}
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("agent: dial ctl %s: %w", addr, err)
 	}
 	return &ctlClient{conn: conn, client: pppv1.NewControlClient(conn)}, nil
+}
+
+// credsOrInsecure returns the TLS creds when present, otherwise plaintext.
+func credsOrInsecure(creds credentials.TransportCredentials) credentials.TransportCredentials {
+	if creds != nil {
+		return creds
+	}
+	return insecure.NewCredentials()
 }
 
 // Close releases the connection.

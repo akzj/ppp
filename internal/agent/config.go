@@ -49,6 +49,14 @@ type Config struct {
 	// LeaseTTL is the default session-lease duration.
 	LeaseTTL time.Duration
 
+	// TLS options for mTLS (all empty = plaintext, development compatibility).
+	TLSCA   string
+	TLSCert string
+	TLSKey  string
+	// TLSServerName is the name the client verifies on the server certificate
+	// (ctl + peers); empty disables the hostname check.
+	TLSServerName string
+
 	role string // parsed from flags, converted by Finalize
 }
 
@@ -76,6 +84,10 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.HeartbeatInterval, "heartbeat-interval", c.HeartbeatInterval, "heartbeat interval")
 	fs.IntVar(&c.DownloadConcurrency, "download-concurrency", c.DownloadConcurrency, "max concurrent piece fetches per file")
 	fs.DurationVar(&c.LeaseTTL, "lease-ttl", c.LeaseTTL, "session lease TTL")
+	fs.StringVar(&c.TLSCA, "tls-ca", c.TLSCA, "CA cert file for mTLS (empty = plaintext)")
+	fs.StringVar(&c.TLSCert, "tls-cert", c.TLSCert, "node cert file for mTLS")
+	fs.StringVar(&c.TLSKey, "tls-key", c.TLSKey, "node key file for mTLS")
+	fs.StringVar(&c.TLSServerName, "tls-server-name", c.TLSServerName, "server name verified on ctl/peer certificates")
 }
 
 // Finalize converts parsed flag values into typed fields and validates the
