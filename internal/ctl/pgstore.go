@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"github.com/jackc/pgx/v5"
@@ -79,9 +80,40 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// OpenPGStore connects to PostgreSQL and ensures the schema exists.
+// pgStoreOpTimeout bounds every store operation (pool acquire + query
+// round-trip) so a hung PostgreSQL cannot block a control-plane RPC forever.
+// statement_timeout bounds the query on the server side; this bounds the
+// client side too.
+const pgStoreOpTimeout = 15 * time.Second
+
+// opCtx returns a bounded context for a single store operation.
+func (s *pgStore) opCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), pgStoreOpTimeout)
+}
+
+// OpenPGStore connects to PostgreSQL and ensures the schema exists. The pool
+// is configured so a hung database cannot pin a connection forever:
+// statement_timeout on the server, bounded acquire/query timeouts on the
+// client, and connection recycling (max lifetime / idle) to drop stale
+// connections.
 func OpenPGStore(ctx context.Context, dsn string) (*pgStore, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("ctl: parse pg dsn: %w", err)
+	}
+	// Server-side: abort a statement that runs longer than 10s.
+	if poolCfg.ConnConfig.RuntimeParams == nil {
+		poolCfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = "10000"
+	// Client-side: bound acquire/query timeouts and recycle connections.
+	poolCfg.MaxConns = 16
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnLifetimeJitter = 5 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	poolCfg.HealthCheckPeriod = 30 * time.Second
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("ctl: connect pg: %w", err)
 	}
@@ -116,6 +148,9 @@ func jsonUnmarshal(data []byte, m proto.Message) error {
 // ============ Trees ============
 
 func (s *pgStore) CreateTree(t *pppv1.Tree) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if t == nil || t.GetId() == "" {
 		return errors.New("ctl: tree id is required")
 	}
@@ -123,7 +158,7 @@ func (s *pgStore) CreateTree(t *pppv1.Tree) error {
 	if err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(context.Background(),
+	tag, err := s.pool.Exec(ctx,
 		`INSERT INTO trees(tree_id, data) VALUES ($1, $2::jsonb) ON CONFLICT (tree_id) DO NOTHING`,
 		t.GetId(), string(data))
 	if err != nil {
@@ -136,11 +171,14 @@ func (s *pgStore) CreateTree(t *pppv1.Tree) error {
 }
 
 func (s *pgStore) GetTree(id string) (*pppv1.Tree, error) {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if id == "" {
 		return nil, errors.New("ctl: tree id is empty")
 	}
 	var raw string
-	err := s.pool.QueryRow(context.Background(), `SELECT data FROM trees WHERE tree_id = $1`, id).Scan(&raw)
+	err := s.pool.QueryRow(ctx, `SELECT data FROM trees WHERE tree_id = $1`, id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -155,7 +193,10 @@ func (s *pgStore) GetTree(id string) (*pppv1.Tree, error) {
 }
 
 func (s *pgStore) ListTrees() ([]*pppv1.Tree, error) {
-	rows, err := s.pool.Query(context.Background(), `SELECT data FROM trees ORDER BY tree_id`)
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, `SELECT data FROM trees ORDER BY tree_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +217,13 @@ func (s *pgStore) ListTrees() ([]*pppv1.Tree, error) {
 }
 
 func (s *pgStore) DeleteTree(id string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if id == "" {
 		return errors.New("ctl: tree id is empty")
 	}
-	tag, err := s.pool.Exec(context.Background(), `DELETE FROM trees WHERE tree_id = $1`, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM trees WHERE tree_id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -192,25 +236,38 @@ func (s *pgStore) DeleteTree(id string) error {
 // DeleteTreeData cascade-removes every record of a tree without touching the
 // tree record itself.
 func (s *pgStore) DeleteTreeData(treeID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if treeID == "" {
 		return errors.New("ctl: tree id is required")
 	}
+	// Atomic cleanup: all four deletes commit or roll back together so a
+	// failure cannot leave a partially-cleared tree.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	for _, q := range []string{
 		`DELETE FROM nodes WHERE tree_id = $1`,
 		`DELETE FROM jobs WHERE tree_id = $1`,
 		`DELETE FROM banned WHERE tree_id = $1`,
 		`DELETE FROM progress WHERE tree_id = $1`,
 	} {
-		if _, err := s.pool.Exec(context.Background(), q, treeID); err != nil {
+		if _, err := tx.Exec(ctx, q, treeID); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ============ Nodes ============
 
 func (s *pgStore) PutNode(n *pppv1.Node) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if n.GetId() == "" || n.GetTreeId() == "" {
 		return errors.New("ctl: node id and tree_id are required")
 	}
@@ -218,7 +275,7 @@ func (s *pgStore) PutNode(n *pppv1.Node) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(context.Background(),
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO nodes(tree_id, node_id, data) VALUES ($1, $2, $3::jsonb)
 		 ON CONFLICT (tree_id, node_id) DO UPDATE SET data = EXCLUDED.data`,
 		n.GetTreeId(), n.GetId(), string(data))
@@ -226,16 +283,22 @@ func (s *pgStore) PutNode(n *pppv1.Node) error {
 }
 
 func (s *pgStore) DeleteNode(treeID, nodeID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if treeID == "" || nodeID == "" {
 		return errors.New("ctl: node tree_id and id are required")
 	}
-	_, err := s.pool.Exec(context.Background(),
+	_, err := s.pool.Exec(ctx,
 		`DELETE FROM nodes WHERE tree_id = $1 AND node_id = $2`, treeID, nodeID)
 	return err
 }
 
 func (s *pgStore) ListNodes(treeID string) ([]*pppv1.Node, error) {
-	rows, err := s.pool.Query(context.Background(),
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx,
 		`SELECT data FROM nodes WHERE ($1 = '' OR tree_id = $1) ORDER BY node_id`, treeID)
 	if err != nil {
 		return nil, err
@@ -259,16 +322,22 @@ func (s *pgStore) ListNodes(treeID string) ([]*pppv1.Node, error) {
 // ============ Generations ============
 
 func (s *pgStore) TopologyGeneration(treeID string) (int64, error) {
-	return s.getGen(treeID, metaTopologyGenKey)
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	return s.getGen(ctx, treeID, metaTopologyGenKey)
 }
 
 func (s *pgStore) BannedGeneration(treeID string) (int64, error) {
-	return s.getGen(treeID, metaBannedGenKey)
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	return s.getGen(ctx, treeID, metaBannedGenKey)
 }
 
-func (s *pgStore) getGen(treeID, key string) (int64, error) {
+func (s *pgStore) getGen(ctx context.Context, treeID, key string) (int64, error) {
 	var v int64
-	err := s.pool.QueryRow(context.Background(),
+	err := s.pool.QueryRow(ctx,
 		`SELECT value FROM meta WHERE tree_id = $1 AND key = $2`, treeID, key).Scan(&v)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
@@ -280,9 +349,9 @@ func (s *pgStore) getGen(treeID, key string) (int64, error) {
 }
 
 // bumpGen atomically increments a generation counter (INSERT 1 when missing).
-func (s *pgStore) bumpGen(treeID, key string) (int64, error) {
+func (s *pgStore) bumpGen(ctx context.Context, treeID, key string) (int64, error) {
 	var v int64
-	err := s.pool.QueryRow(context.Background(),
+	err := s.pool.QueryRow(ctx,
 		`INSERT INTO meta(tree_id, key, value) VALUES ($1, $2, 1)
 		 ON CONFLICT (tree_id, key) DO UPDATE SET value = meta.value + 1
 		 RETURNING value`,
@@ -291,12 +360,18 @@ func (s *pgStore) bumpGen(treeID, key string) (int64, error) {
 }
 
 func (s *pgStore) BumpTopologyGeneration(treeID string) (int64, error) {
-	return s.bumpGen(treeID, metaTopologyGenKey)
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	return s.bumpGen(ctx, treeID, metaTopologyGenKey)
 }
 
 // ============ Banned list ============
 
 func (s *pgStore) AddBanned(b *pppv1.BannedFile) (int64, bool, error) {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if b.GetTreeId() == "" || b.GetFilename() == "" {
 		return 0, false, errors.New("ctl: banned tree_id and filename are required")
 	}
@@ -304,69 +379,90 @@ func (s *pgStore) AddBanned(b *pppv1.BannedFile) (int64, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	tx, err := s.pool.Begin(context.Background())
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, false, err
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	var exists bool
-	if err := tx.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM banned WHERE tree_id = $1 AND filename = $2)`,
-		b.GetTreeId(), b.GetFilename()).Scan(&exists); err != nil {
+	// Atomic insert guard: exactly one concurrent caller inserts the row; the
+	// losers get no row back and report already=true (no SELECT-then-INSERT
+	// TOCTOU race, so concurrent AddBanned on the same (tree, file) never
+	// hits a unique violation).
+	var inserted string
+	err = tx.QueryRow(ctx,
+		`INSERT INTO banned(tree_id, filename, data) VALUES ($1, $2, $3::jsonb)
+		 ON CONFLICT (tree_id, filename) DO NOTHING
+		 RETURNING filename`,
+		b.GetTreeId(), b.GetFilename(), string(data)).Scan(&inserted)
+	switch {
+	case err == nil:
+		gen, err := s.bumpGenTx(ctx, tx, b.GetTreeId(), metaBannedGenKey)
+		if err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, false, err
+		}
+		return gen, false, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// Already present: return the current generation, consistent within
+		// this transaction with the "already exists" state.
+		gen, err := s.getGenTx(ctx, tx, b.GetTreeId(), metaBannedGenKey)
+		if err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, false, err
+		}
+		return gen, true, nil
+	default:
 		return 0, false, err
 	}
-	if exists {
-		gen, err := s.getGenTx(context.Background(), tx, b.GetTreeId(), metaBannedGenKey)
-		return gen, true, err
-	}
-	if _, err := tx.Exec(context.Background(),
-		`INSERT INTO banned(tree_id, filename, data) VALUES ($1, $2, $3::jsonb)`,
-		b.GetTreeId(), b.GetFilename(), string(data)); err != nil {
-		return 0, false, err
-	}
-	gen, err := s.bumpGenTx(context.Background(), tx, b.GetTreeId(), metaBannedGenKey)
-	if err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(context.Background()); err != nil {
-		return 0, false, err
-	}
-	return gen, false, nil
 }
 
 func (s *pgStore) RemoveBanned(treeID, filename string) (int64, bool, error) {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if treeID == "" || filename == "" {
 		return 0, false, errors.New("ctl: banned tree_id and filename are required")
 	}
-	tx, err := s.pool.Begin(context.Background())
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, false, err
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	var exists bool
-	if err := tx.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM banned WHERE tree_id = $1 AND filename = $2)`,
-		treeID, filename).Scan(&exists); err != nil {
+	// Idempotent remove: DELETE ... RETURNING removes the row when present and
+	// bumps the generation only when a removal actually happened; an absent
+	// row is not an error.
+	var deleted string
+	err = tx.QueryRow(ctx,
+		`DELETE FROM banned WHERE tree_id = $1 AND filename = $2 RETURNING filename`,
+		treeID, filename).Scan(&deleted)
+	switch {
+	case err == nil:
+		gen, err := s.bumpGenTx(ctx, tx, treeID, metaBannedGenKey)
+		if err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, false, err
+		}
+		return gen, true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		gen, err := s.getGenTx(ctx, tx, treeID, metaBannedGenKey)
+		if err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, false, err
+		}
+		return gen, false, nil
+	default:
 		return 0, false, err
 	}
-	if !exists {
-		gen, err := s.getGenTx(context.Background(), tx, treeID, metaBannedGenKey)
-		return gen, false, err
-	}
-	if _, err := tx.Exec(context.Background(),
-		`DELETE FROM banned WHERE tree_id = $1 AND filename = $2`, treeID, filename); err != nil {
-		return 0, false, err
-	}
-	gen, err := s.bumpGenTx(context.Background(), tx, treeID, metaBannedGenKey)
-	if err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(context.Background()); err != nil {
-		return 0, false, err
-	}
-	return gen, true, nil
 }
 
 // getGenTx reads a generation counter inside a transaction (0 when missing).
@@ -394,8 +490,11 @@ func (s *pgStore) bumpGenTx(ctx context.Context, tx pgx.Tx, treeID, key string) 
 }
 
 func (s *pgStore) GetBanned(treeID, filename string) (*pppv1.BannedFile, error) {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	var raw string
-	err := s.pool.QueryRow(context.Background(),
+	err := s.pool.QueryRow(ctx,
 		`SELECT data FROM banned WHERE tree_id = $1 AND filename = $2`, treeID, filename).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -411,7 +510,10 @@ func (s *pgStore) GetBanned(treeID, filename string) (*pppv1.BannedFile, error) 
 }
 
 func (s *pgStore) ListBanned(treeID string) ([]*pppv1.BannedFile, error) {
-	rows, err := s.pool.Query(context.Background(),
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx,
 		`SELECT data FROM banned WHERE tree_id = $1 ORDER BY filename`, treeID)
 	if err != nil {
 		return nil, err
@@ -435,6 +537,9 @@ func (s *pgStore) ListBanned(treeID string) ([]*pppv1.BannedFile, error) {
 // ============ Jobs ============
 
 func (s *pgStore) CreateJob(j *pppv1.Job) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if j.GetId() == "" {
 		return errors.New("ctl: job id is empty")
 	}
@@ -442,7 +547,7 @@ func (s *pgStore) CreateJob(j *pppv1.Job) error {
 	if err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(context.Background(),
+	tag, err := s.pool.Exec(ctx,
 		`INSERT INTO jobs(job_id, tree_id, data) VALUES ($1, $2, $3::jsonb) ON CONFLICT (job_id) DO NOTHING`,
 		j.GetId(), j.GetTreeId(), string(data))
 	if err != nil {
@@ -455,11 +560,14 @@ func (s *pgStore) CreateJob(j *pppv1.Job) error {
 }
 
 func (s *pgStore) GetJob(id string) (*pppv1.Job, error) {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if id == "" {
 		return nil, errors.New("ctl: job id is empty")
 	}
 	var raw string
-	err := s.pool.QueryRow(context.Background(), `SELECT data FROM jobs WHERE job_id = $1`, id).Scan(&raw)
+	err := s.pool.QueryRow(ctx, `SELECT data FROM jobs WHERE job_id = $1`, id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -474,6 +582,9 @@ func (s *pgStore) GetJob(id string) (*pppv1.Job, error) {
 }
 
 func (s *pgStore) UpdateJob(j *pppv1.Job) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if j.GetId() == "" {
 		return errors.New("ctl: job id is empty")
 	}
@@ -481,7 +592,7 @@ func (s *pgStore) UpdateJob(j *pppv1.Job) error {
 	if err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(context.Background(),
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE jobs SET data = $1::jsonb, tree_id = $2 WHERE job_id = $3`,
 		string(data), j.GetTreeId(), j.GetId())
 	if err != nil {
@@ -494,7 +605,10 @@ func (s *pgStore) UpdateJob(j *pppv1.Job) error {
 }
 
 func (s *pgStore) ListJobs() ([]*pppv1.Job, error) {
-	rows, err := s.pool.Query(context.Background(), `SELECT data FROM jobs ORDER BY job_id`)
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, `SELECT data FROM jobs ORDER BY job_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +629,10 @@ func (s *pgStore) ListJobs() ([]*pppv1.Job, error) {
 }
 
 func (s *pgStore) JobsByFile(treeID, filename string) ([]*pppv1.Job, error) {
-	rows, err := s.pool.Query(context.Background(),
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx,
 		`SELECT data FROM jobs WHERE tree_id = $1 AND data->>'filename' = $2 ORDER BY job_id`,
 		treeID, filename)
 	if err != nil {
@@ -540,6 +657,9 @@ func (s *pgStore) JobsByFile(treeID, filename string) ([]*pppv1.Job, error) {
 // ============ Progress ============
 
 func (s *pgStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
 	if p == nil || p.GetTreeId() == "" || p.GetFilename() == "" || nodeID == "" {
 		return errors.New("ctl: progress tree_id, filename and node_id are required")
 	}
@@ -548,7 +668,7 @@ func (s *pgStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(context.Background(),
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO progress(tree_id, job_id, filename, node_id, data) VALUES ($1, $2, $3, $4, $5::jsonb)
 		 ON CONFLICT (tree_id, job_id, filename, node_id) DO UPDATE SET data = EXCLUDED.data`,
 		p.GetTreeId(), p.GetJobId(), p.GetFilename(), nodeID, string(data))
@@ -556,7 +676,10 @@ func (s *pgStore) UpsertProgress(p *pppv1.ProgressState, nodeID string) error {
 }
 
 func (s *pgStore) ListProgress(treeID string) ([]*pppv1.ProgressState, error) {
-	rows, err := s.pool.Query(context.Background(),
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx,
 		`SELECT data FROM progress WHERE ($1 = '' OR tree_id = $1) ORDER BY tree_id, node_id`, treeID)
 	if err != nil {
 		return nil, err
