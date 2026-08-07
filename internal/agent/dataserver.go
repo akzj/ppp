@@ -144,6 +144,14 @@ func (s *DataServer) DownloadFile(req *pppv1.DownloadFileRequest, stream pppv1.D
 		JobID:    req.GetJobId(),
 		From:     req.GetFrom(),
 	})
+	// INVARIANT: every path that needs a file must addNeed (or an equivalent
+	// start) — Ensure only records the size and never starts the fetch loop.
+	// The DownloadFile caller is a local need: addNeed starts fetching and
+	// keeps the downloader alive while the stream is open; releaseNeed lets it
+	// stop when the leaf leaves. addNeed is harmless when the file is already
+	// complete (the short-lived run finds no missing pieces).
+	d.addNeed()
+	defer d.releaseNeed()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {

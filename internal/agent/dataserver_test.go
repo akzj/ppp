@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -117,6 +119,52 @@ func TestDataServerDownloadFileBanned(t *testing.T) {
 	wantPath := filepath.Join(ds.downloadPath, "a.bin")
 	if stream.msgs[0].GetLocalPath() != wantPath {
 		t.Fatalf("DownloadFile(banned) local_path = %q, want %q", stream.msgs[0].GetLocalPath(), wantPath)
+	}
+}
+
+// TestDataServerDownloadFileSuccess verifies the DownloadFile happy path (B-1
+// regression): the stream must reach SUCCESS and the file must land on disk —
+// the caller's addNeed starts the fetch loop that Ensure alone never starts.
+func TestDataServerDownloadFileSuccess(t *testing.T) {
+	store, err := NewFilePieceStore(t.TempDir() + "/pieces")
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	content := []byte("the quick brown fox jumps over the lazy dog")
+	topo := &fakeTopology{pullFromSource: true}
+	// The fakeSource serves the content; the treeSource message only needs to
+	// be non-nil for the pull-from-source guard.
+	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{data: content},
+		&pppv1.Source{Type: pppv1.Source_HTTP, Urls: []string{"http://fake"}}, "me", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	ds := NewDataServer("me", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
+
+	stream := &mockStream{}
+	if err := ds.DownloadFile(&pppv1.DownloadFileRequest{
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Size: int64(len(content)), JobId: "job:1",
+	}, stream); err != nil {
+		t.Fatalf("DownloadFile: %v", err)
+	}
+	if len(stream.msgs) == 0 {
+		t.Fatal("DownloadFile produced no progress states")
+	}
+	last := stream.msgs[len(stream.msgs)-1]
+	if last.GetState() != pppv1.ProgressState_SUCCESS {
+		t.Fatalf("last state = %v, want SUCCESS (msgs=%v)", last.GetState(), stream.msgs)
+	}
+	if last.GetLocalPath() != filepath.Join(ds.downloadPath, "a.bin") {
+		t.Fatalf("local_path = %q, want <download>/a.bin", last.GetLocalPath())
+	}
+	// The file must be on disk (the sparse store's final path) with the exact
+	// content, and the store must report it complete.
+	final := filepath.Join(ds.store.(*sparsePieceStore).dir, "a.bin")
+	data, err := os.ReadFile(final)
+	if err != nil || !bytes.Equal(data, content) {
+		t.Fatalf("final file = %q, %v; want content", data, err)
+	}
+	if !ds.store.IsComplete("a.bin") {
+		t.Fatal("file not complete after DownloadFile")
 	}
 }
 
