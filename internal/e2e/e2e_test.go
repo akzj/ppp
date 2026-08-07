@@ -402,14 +402,28 @@ func TestE2ESingleRootDistribution(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
+	m1Data := newDataClient(t, m1Addr)
+	m2Data := newDataClient(t, m2Addr)
+
+	// C5 metadata flow: before the root seals (and before any member
+	// download), a member's GetFileInfo is NOT_FOUND (no artifact, no build —
+	// the root's build is Job-driven, so a GetFileInfo never triggers one).
+	beforeInfo, err := m1Data.GetFileInfo(ctx, &pppv1.GetFileInfoRequest{
+		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+	})
+	if err != nil {
+		t.Fatalf("GetFileInfo before seal: %v", err)
+	}
+	if beforeInfo.GetError().GetCode() != pppv1.Error_NOT_FOUND {
+		t.Fatalf("GetFileInfo before seal = %v, want NOT_FOUND", beforeInfo.GetError().GetCode())
+	}
+
 	// The job drives the root's download from the source. Members pull
 	// on-demand (phase-3 design: watchJobsLoop is root-only): a GetPiece on a
 	// member triggers its full-file subtask download from the root, after
 	// which its download path has the final file.
 	waitForFile(t, mmapFinalPath(rootPath, treeID, filename), content, 30*time.Second)
 
-	m1Data := newDataClient(t, m1Addr)
-	m2Data := newDataClient(t, m2Addr)
 	// Trigger both members' downloads (index 0 waits for the whole file).
 	waitPieceState(t, m1Data, treeID, filename, 0, int64(len(content)), pppv1.Error_ERROR_CODE_UNSPECIFIED, 30*time.Second)
 	waitPieceState(t, m2Data, treeID, filename, 0, int64(len(content)), pppv1.Error_ERROR_CODE_UNSPECIFIED, 30*time.Second)
@@ -417,6 +431,27 @@ func TestE2ESingleRootDistribution(t *testing.T) {
 	// Assert every node's download path has the final file with correct content.
 	waitForFile(t, mmapFinalPath(m1Path, treeID, filename), content, 15*time.Second)
 	waitForFile(t, mmapFinalPath(m2Path, treeID, filename), content, 15*time.Second)
+
+	// C5: after the members copied the artifact, GetFileInfo returns the
+	// sealed metadata_id and the member's sealed metadata equals the root's
+	// (the artifact is copied, never regenerated).
+	afterInfo, err := m1Data.GetFileInfo(ctx, &pppv1.GetFileInfoRequest{
+		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+	})
+	if err != nil || afterInfo.GetInfo() == nil {
+		t.Fatalf("GetFileInfo after copy = %v, %v; want Info", afterInfo.GetError(), err)
+	}
+	if len(afterInfo.GetInfo().GetMetadataId()) != 32 {
+		t.Fatalf("member metadata_id len = %d, want 32", len(afterInfo.GetInfo().GetMetadataId()))
+	}
+	rootMeta, rerr := os.ReadFile(filepath.Join(rootPath, filename+".cds.metadata"))
+	m1Meta, merr := os.ReadFile(filepath.Join(m1Path, filename+".cds.metadata"))
+	if rerr != nil || merr != nil {
+		t.Fatalf("read metadata sidecars: root=%v m1=%v", rerr, merr)
+	}
+	if !bytes.Equal(m1Meta, rootMeta) {
+		t.Fatal("member metadata != root metadata (the artifact must be copied exactly)")
+	}
 
 	// --- CancelJob: banned converges, GetPiece returns BANNED ---
 	if _, err := ctl.CancelJob(ctx, &pppv1.CancelJobRequest{TreeId: treeID, Filename: filename}); err != nil {
