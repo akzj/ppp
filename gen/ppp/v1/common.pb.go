@@ -583,12 +583,11 @@ type Job struct {
 	TreeId        string                 `protobuf:"bytes,2,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
 	Filename      string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
 	Size          int64                  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
-	Md5           string                 `protobuf:"bytes,5,opt,name=md5,proto3" json:"md5,omitempty"`
-	Source        *Source                `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
-	State         Job_JobState           `protobuf:"varint,7,opt,name=state,proto3,enum=ppp.v1.Job_JobState" json:"state,omitempty"`
-	TargetNodeIds []string               `protobuf:"bytes,8,rep,name=target_node_ids,json=targetNodeIds,proto3" json:"target_node_ids,omitempty"` // empty = whole tree
-	CreatedAt     int64                  `protobuf:"varint,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     int64                  `protobuf:"varint,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Source        *Source                `protobuf:"bytes,5,opt,name=source,proto3" json:"source,omitempty"` // override tree default source (optional)
+	State         Job_JobState           `protobuf:"varint,6,opt,name=state,proto3,enum=ppp.v1.Job_JobState" json:"state,omitempty"`
+	TargetNodeIds []string               `protobuf:"bytes,7,rep,name=target_node_ids,json=targetNodeIds,proto3" json:"target_node_ids,omitempty"` // empty = whole tree
+	CreatedAt     int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     int64                  `protobuf:"varint,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -649,13 +648,6 @@ func (x *Job) GetSize() int64 {
 		return x.Size
 	}
 	return 0
-}
-
-func (x *Job) GetMd5() string {
-	if x != nil {
-		return x.Md5
-	}
-	return ""
 }
 
 func (x *Job) GetSource() *Source {
@@ -1053,21 +1045,19 @@ const file_ppp_v1_common_proto_rawDesc = "" +
 	"\x06MEMBER\x10\x02\">\n" +
 	"\aTreeKey\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12\x1a\n" +
-	"\bfilename\x18\x02 \x01(\tR\bfilename\"\x97\x03\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\"\x85\x03\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\atree_id\x18\x02 \x01(\tR\x06treeId\x12\x1a\n" +
 	"\bfilename\x18\x03 \x01(\tR\bfilename\x12\x12\n" +
-	"\x04size\x18\x04 \x01(\x03R\x04size\x12\x10\n" +
-	"\x03md5\x18\x05 \x01(\tR\x03md5\x12&\n" +
-	"\x06source\x18\x06 \x01(\v2\x0e.ppp.v1.SourceR\x06source\x12*\n" +
-	"\x05state\x18\a \x01(\x0e2\x14.ppp.v1.Job.JobStateR\x05state\x12&\n" +
-	"\x0ftarget_node_ids\x18\b \x03(\tR\rtargetNodeIds\x12\x1d\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\x12&\n" +
+	"\x06source\x18\x05 \x01(\v2\x0e.ppp.v1.SourceR\x06source\x12*\n" +
+	"\x05state\x18\x06 \x01(\x0e2\x14.ppp.v1.Job.JobStateR\x05state\x12&\n" +
+	"\x0ftarget_node_ids\x18\a \x03(\tR\rtargetNodeIds\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\t \x01(\x03R\tcreatedAt\x12\x1d\n" +
+	"created_at\x18\b \x01(\x03R\tcreatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\n" +
-	" \x01(\x03R\tupdatedAt\"k\n" +
+	"updated_at\x18\t \x01(\x03R\tupdatedAt\"k\n" +
 	"\bJobState\x12\x19\n" +
 	"\x15JOB_STATE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aCREATED\x10\x01\x12\x10\n" +

@@ -618,7 +618,6 @@ func (s *Server) CreateJob(_ context.Context, req *pppv1.CreateJobRequest) (*ppp
 		TreeId:        req.GetTreeId(),
 		Filename:      req.GetFilename(),
 		Size:          req.GetSize(),
-		Md5:           req.GetMd5(),
 		Source:        req.GetSource(),
 		TargetNodeIds: req.GetTargetNodeIds(),
 		State:         pppv1.Job_CREATED,

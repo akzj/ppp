@@ -1022,9 +1022,8 @@ type CreateJobRequest struct {
 	TreeId        string                 `protobuf:"bytes,1,opt,name=tree_id,json=treeId,proto3" json:"tree_id,omitempty"`
 	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"`
 	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
-	Md5           string                 `protobuf:"bytes,4,opt,name=md5,proto3" json:"md5,omitempty"`
-	Source        *Source                `protobuf:"bytes,5,opt,name=source,proto3" json:"source,omitempty"`                                      // override tree default source (optional)
-	TargetNodeIds []string               `protobuf:"bytes,6,rep,name=target_node_ids,json=targetNodeIds,proto3" json:"target_node_ids,omitempty"` // empty = whole tree
+	Source        *Source                `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`                                      // override tree default source (optional)
+	TargetNodeIds []string               `protobuf:"bytes,5,rep,name=target_node_ids,json=targetNodeIds,proto3" json:"target_node_ids,omitempty"` // empty = whole tree
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1078,13 +1077,6 @@ func (x *CreateJobRequest) GetSize() int64 {
 		return x.Size
 	}
 	return 0
-}
-
-func (x *CreateJobRequest) GetMd5() string {
-	if x != nil {
-		return x.Md5
-	}
-	return ""
 }
 
 func (x *CreateJobRequest) GetSource() *Source {
@@ -1851,14 +1843,13 @@ const file_ppp_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x01 \x01(\x03R\n" +
 	"generation\x12*\n" +
-	"\x06banned\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x06banned\"\xbd\x01\n" +
+	"\x06banned\x18\x02 \x03(\v2\x12.ppp.v1.BannedFileR\x06banned\"\xab\x01\n" +
 	"\x10CreateJobRequest\x12\x17\n" +
 	"\atree_id\x18\x01 \x01(\tR\x06treeId\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x10\n" +
-	"\x03md5\x18\x04 \x01(\tR\x03md5\x12&\n" +
-	"\x06source\x18\x05 \x01(\v2\x0e.ppp.v1.SourceR\x06source\x12&\n" +
-	"\x0ftarget_node_ids\x18\x06 \x03(\tR\rtargetNodeIds\"2\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12&\n" +
+	"\x06source\x18\x04 \x01(\v2\x0e.ppp.v1.SourceR\x06source\x12&\n" +
+	"\x0ftarget_node_ids\x18\x05 \x03(\tR\rtargetNodeIds\"2\n" +
 	"\x11CreateJobResponse\x12\x1d\n" +
 	"\x03job\x18\x01 \x01(\v2\v.ppp.v1.JobR\x03job\"(\n" +
 	"\x0fQueryJobRequest\x12\x15\n" +

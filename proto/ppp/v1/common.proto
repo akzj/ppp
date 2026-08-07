@@ -72,12 +72,11 @@ message Job {
   string tree_id = 2;
   string filename = 3;
   int64 size = 4;
-  string md5 = 5;
-  Source source = 6;
-  JobState state = 7;
-  repeated string target_node_ids = 8; // empty = whole tree
-  int64 created_at = 9;
-  int64 updated_at = 10;
+  Source source = 5;                 // override tree default source (optional)
+  JobState state = 6;
+  repeated string target_node_ids = 7; // empty = whole tree
+  int64 created_at = 8;
+  int64 updated_at = 9;
 }
 
 // ============ Cancellation (persistent banned distribution list) ============

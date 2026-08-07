@@ -29,6 +29,45 @@ service Data {
 
   // Resolve the final on-disk path of a file on this node.
   rpc ResolvePath(ResolvePathRequest) returns (ResolvePathResponse);
+
+  // File metadata (file-distribution core §5.1): GetFileInfo returns the
+  // sealed artifact's info (metadata_id identifies the immutable metadata
+  // bytes); GetMetadata streams those bytes. A node binds exactly one
+  // metadata_id per download; GetPiece requests carry it so an upstream
+  // refuses pieces whose metadata differs (CONTENT_CONFLICT).
+  rpc GetFileInfo(GetFileInfoRequest) returns (GetFileInfoResponse);
+  rpc GetMetadata(GetMetadataRequest) returns (stream MetadataChunk);
+}
+
+message FileInfo {
+  TreeKey key = 1;
+  int64 file_size = 2;
+  int64 piece_size = 3;
+  int64 piece_count = 4;
+  bytes metadata_id = 5;    // SHA-256 of the canonical metadata bytes
+  int64 metadata_size = 6;
+  string digest_algorithm = 7; // e.g. "SHA-256"
+}
+
+message MetadataChunk {
+  bytes metadata_id = 1;    // the metadata this chunk belongs to
+  int64 offset = 2;
+  bytes data = 3;
+}
+
+message GetFileInfoRequest {
+  TreeKey key = 1;
+}
+message GetFileInfoResponse {
+  oneof result {
+    FileInfo info = 1;
+    Error error = 2;
+  }
+}
+
+message GetMetadataRequest {
+  TreeKey key = 1;
+  bytes metadata_id = 2;    // bind the download to this metadata_id
 }
 
 message ResolvePathRequest {
@@ -47,6 +86,10 @@ message GetPieceRequest {
   // center jobs "job:<uuid>", local back-to-source jobs "local:<uuid>".
   string job_id = 4;
   repeated Hop from = 5;     // loop-prevention path (nodeID + jobID)
+  // metadata_id binds this request to the immutable metadata the downloader
+  // has validated; the upstream serves the piece only when its sealed
+  // artifact has the same metadata_id (else CONTENT_CONFLICT).
+  bytes metadata_id = 6;
 }
 message Hop {
   string node_id = 1;
@@ -69,6 +112,11 @@ message Error {
     LOOP_DETECTED = 3;
     BAD_REQUEST = 4;
     INTERNAL = 5;
+    NOT_READY = 6;           // artifact not yet sealed/publishable
+    CONTENT_CONFLICT = 7;    // different metadata_id for the same filename
+    METADATA_CORRUPT = 8;    // metadata bytes failed validation
+    PIECE_DIGEST_MISMATCH = 9;  // piece digest differs from metadata
+    FILE_DIGEST_MISMATCH = 10;  // whole-file digest differs from metadata
   }
 }
 

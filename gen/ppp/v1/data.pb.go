@@ -30,17 +30,27 @@ const (
 	Error_LOOP_DETECTED          Error_ErrorCode = 3
 	Error_BAD_REQUEST            Error_ErrorCode = 4
 	Error_INTERNAL               Error_ErrorCode = 5
+	Error_NOT_READY              Error_ErrorCode = 6  // artifact not yet sealed/publishable
+	Error_CONTENT_CONFLICT       Error_ErrorCode = 7  // different metadata_id for the same filename
+	Error_METADATA_CORRUPT       Error_ErrorCode = 8  // metadata bytes failed validation
+	Error_PIECE_DIGEST_MISMATCH  Error_ErrorCode = 9  // piece digest differs from metadata
+	Error_FILE_DIGEST_MISMATCH   Error_ErrorCode = 10 // whole-file digest differs from metadata
 )
 
 // Enum value maps for Error_ErrorCode.
 var (
 	Error_ErrorCode_name = map[int32]string{
-		0: "ERROR_CODE_UNSPECIFIED",
-		1: "BANNED",
-		2: "NOT_FOUND",
-		3: "LOOP_DETECTED",
-		4: "BAD_REQUEST",
-		5: "INTERNAL",
+		0:  "ERROR_CODE_UNSPECIFIED",
+		1:  "BANNED",
+		2:  "NOT_FOUND",
+		3:  "LOOP_DETECTED",
+		4:  "BAD_REQUEST",
+		5:  "INTERNAL",
+		6:  "NOT_READY",
+		7:  "CONTENT_CONFLICT",
+		8:  "METADATA_CORRUPT",
+		9:  "PIECE_DIGEST_MISMATCH",
+		10: "FILE_DIGEST_MISMATCH",
 	}
 	Error_ErrorCode_value = map[string]int32{
 		"ERROR_CODE_UNSPECIFIED": 0,
@@ -49,6 +59,11 @@ var (
 		"LOOP_DETECTED":          3,
 		"BAD_REQUEST":            4,
 		"INTERNAL":               5,
+		"NOT_READY":              6,
+		"CONTENT_CONFLICT":       7,
+		"METADATA_CORRUPT":       8,
+		"PIECE_DIGEST_MISMATCH":  9,
+		"FILE_DIGEST_MISMATCH":   10,
 	}
 )
 
@@ -76,7 +91,337 @@ func (x Error_ErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Error_ErrorCode.Descriptor instead.
 func (Error_ErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{5, 0}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{10, 0}
+}
+
+type FileInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Key             *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	FileSize        int64                  `protobuf:"varint,2,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
+	PieceSize       int64                  `protobuf:"varint,3,opt,name=piece_size,json=pieceSize,proto3" json:"piece_size,omitempty"`
+	PieceCount      int64                  `protobuf:"varint,4,opt,name=piece_count,json=pieceCount,proto3" json:"piece_count,omitempty"`
+	MetadataId      []byte                 `protobuf:"bytes,5,opt,name=metadata_id,json=metadataId,proto3" json:"metadata_id,omitempty"` // SHA-256 of the canonical metadata bytes
+	MetadataSize    int64                  `protobuf:"varint,6,opt,name=metadata_size,json=metadataSize,proto3" json:"metadata_size,omitempty"`
+	DigestAlgorithm string                 `protobuf:"bytes,7,opt,name=digest_algorithm,json=digestAlgorithm,proto3" json:"digest_algorithm,omitempty"` // e.g. "SHA-256"
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FileInfo) Reset() {
+	*x = FileInfo{}
+	mi := &file_ppp_v1_data_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileInfo) ProtoMessage() {}
+
+func (x *FileInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_data_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileInfo.ProtoReflect.Descriptor instead.
+func (*FileInfo) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *FileInfo) GetKey() *TreeKey {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *FileInfo) GetFileSize() int64 {
+	if x != nil {
+		return x.FileSize
+	}
+	return 0
+}
+
+func (x *FileInfo) GetPieceSize() int64 {
+	if x != nil {
+		return x.PieceSize
+	}
+	return 0
+}
+
+func (x *FileInfo) GetPieceCount() int64 {
+	if x != nil {
+		return x.PieceCount
+	}
+	return 0
+}
+
+func (x *FileInfo) GetMetadataId() []byte {
+	if x != nil {
+		return x.MetadataId
+	}
+	return nil
+}
+
+func (x *FileInfo) GetMetadataSize() int64 {
+	if x != nil {
+		return x.MetadataSize
+	}
+	return 0
+}
+
+func (x *FileInfo) GetDigestAlgorithm() string {
+	if x != nil {
+		return x.DigestAlgorithm
+	}
+	return ""
+}
+
+type MetadataChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MetadataId    []byte                 `protobuf:"bytes,1,opt,name=metadata_id,json=metadataId,proto3" json:"metadata_id,omitempty"` // the metadata this chunk belongs to
+	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MetadataChunk) Reset() {
+	*x = MetadataChunk{}
+	mi := &file_ppp_v1_data_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MetadataChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MetadataChunk) ProtoMessage() {}
+
+func (x *MetadataChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_data_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MetadataChunk.ProtoReflect.Descriptor instead.
+func (*MetadataChunk) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *MetadataChunk) GetMetadataId() []byte {
+	if x != nil {
+		return x.MetadataId
+	}
+	return nil
+}
+
+func (x *MetadataChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *MetadataChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type GetFileInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFileInfoRequest) Reset() {
+	*x = GetFileInfoRequest{}
+	mi := &file_ppp_v1_data_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFileInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFileInfoRequest) ProtoMessage() {}
+
+func (x *GetFileInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_data_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFileInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetFileInfoRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GetFileInfoRequest) GetKey() *TreeKey {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+type GetFileInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Result:
+	//
+	//	*GetFileInfoResponse_Info
+	//	*GetFileInfoResponse_Error
+	Result        isGetFileInfoResponse_Result `protobuf_oneof:"result"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFileInfoResponse) Reset() {
+	*x = GetFileInfoResponse{}
+	mi := &file_ppp_v1_data_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFileInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFileInfoResponse) ProtoMessage() {}
+
+func (x *GetFileInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_data_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFileInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetFileInfoResponse) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetFileInfoResponse) GetResult() isGetFileInfoResponse_Result {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *GetFileInfoResponse) GetInfo() *FileInfo {
+	if x != nil {
+		if x, ok := x.Result.(*GetFileInfoResponse_Info); ok {
+			return x.Info
+		}
+	}
+	return nil
+}
+
+func (x *GetFileInfoResponse) GetError() *Error {
+	if x != nil {
+		if x, ok := x.Result.(*GetFileInfoResponse_Error); ok {
+			return x.Error
+		}
+	}
+	return nil
+}
+
+type isGetFileInfoResponse_Result interface {
+	isGetFileInfoResponse_Result()
+}
+
+type GetFileInfoResponse_Info struct {
+	Info *FileInfo `protobuf:"bytes,1,opt,name=info,proto3,oneof"`
+}
+
+type GetFileInfoResponse_Error struct {
+	Error *Error `protobuf:"bytes,2,opt,name=error,proto3,oneof"`
+}
+
+func (*GetFileInfoResponse_Info) isGetFileInfoResponse_Result() {}
+
+func (*GetFileInfoResponse_Error) isGetFileInfoResponse_Result() {}
+
+type GetMetadataRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           *TreeKey               `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	MetadataId    []byte                 `protobuf:"bytes,2,opt,name=metadata_id,json=metadataId,proto3" json:"metadata_id,omitempty"` // bind the download to this metadata_id
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMetadataRequest) Reset() {
+	*x = GetMetadataRequest{}
+	mi := &file_ppp_v1_data_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMetadataRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMetadataRequest) ProtoMessage() {}
+
+func (x *GetMetadataRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ppp_v1_data_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMetadataRequest.ProtoReflect.Descriptor instead.
+func (*GetMetadataRequest) Descriptor() ([]byte, []int) {
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *GetMetadataRequest) GetKey() *TreeKey {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *GetMetadataRequest) GetMetadataId() []byte {
+	if x != nil {
+		return x.MetadataId
+	}
+	return nil
 }
 
 type ResolvePathRequest struct {
@@ -88,7 +433,7 @@ type ResolvePathRequest struct {
 
 func (x *ResolvePathRequest) Reset() {
 	*x = ResolvePathRequest{}
-	mi := &file_ppp_v1_data_proto_msgTypes[0]
+	mi := &file_ppp_v1_data_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -100,7 +445,7 @@ func (x *ResolvePathRequest) String() string {
 func (*ResolvePathRequest) ProtoMessage() {}
 
 func (x *ResolvePathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[0]
+	mi := &file_ppp_v1_data_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -113,7 +458,7 @@ func (x *ResolvePathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePathRequest.ProtoReflect.Descriptor instead.
 func (*ResolvePathRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{0}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ResolvePathRequest) GetKey() *TreeKey {
@@ -133,7 +478,7 @@ type ResolvePathResponse struct {
 
 func (x *ResolvePathResponse) Reset() {
 	*x = ResolvePathResponse{}
-	mi := &file_ppp_v1_data_proto_msgTypes[1]
+	mi := &file_ppp_v1_data_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -145,7 +490,7 @@ func (x *ResolvePathResponse) String() string {
 func (*ResolvePathResponse) ProtoMessage() {}
 
 func (x *ResolvePathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[1]
+	mi := &file_ppp_v1_data_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -158,7 +503,7 @@ func (x *ResolvePathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePathResponse.ProtoReflect.Descriptor instead.
 func (*ResolvePathResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{1}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ResolvePathResponse) GetLocalPath() string {
@@ -182,15 +527,19 @@ type GetPieceRequest struct {
 	Size  int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"` // total file size (for validation)
 	// job_id follows the convention in control.proto CancelJobRequest:
 	// center jobs "job:<uuid>", local back-to-source jobs "local:<uuid>".
-	JobId         string `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	From          []*Hop `protobuf:"bytes,5,rep,name=from,proto3" json:"from,omitempty"` // loop-prevention path (nodeID + jobID)
+	JobId string `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	From  []*Hop `protobuf:"bytes,5,rep,name=from,proto3" json:"from,omitempty"` // loop-prevention path (nodeID + jobID)
+	// metadata_id binds this request to the immutable metadata the downloader
+	// has validated; the upstream serves the piece only when its sealed
+	// artifact has the same metadata_id (else CONTENT_CONFLICT).
+	MetadataId    []byte `protobuf:"bytes,6,opt,name=metadata_id,json=metadataId,proto3" json:"metadata_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetPieceRequest) Reset() {
 	*x = GetPieceRequest{}
-	mi := &file_ppp_v1_data_proto_msgTypes[2]
+	mi := &file_ppp_v1_data_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -202,7 +551,7 @@ func (x *GetPieceRequest) String() string {
 func (*GetPieceRequest) ProtoMessage() {}
 
 func (x *GetPieceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[2]
+	mi := &file_ppp_v1_data_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -215,7 +564,7 @@ func (x *GetPieceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPieceRequest.ProtoReflect.Descriptor instead.
 func (*GetPieceRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{2}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetPieceRequest) GetKey() *TreeKey {
@@ -253,6 +602,13 @@ func (x *GetPieceRequest) GetFrom() []*Hop {
 	return nil
 }
 
+func (x *GetPieceRequest) GetMetadataId() []byte {
+	if x != nil {
+		return x.MetadataId
+	}
+	return nil
+}
+
 type Hop struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
@@ -263,7 +619,7 @@ type Hop struct {
 
 func (x *Hop) Reset() {
 	*x = Hop{}
-	mi := &file_ppp_v1_data_proto_msgTypes[3]
+	mi := &file_ppp_v1_data_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -275,7 +631,7 @@ func (x *Hop) String() string {
 func (*Hop) ProtoMessage() {}
 
 func (x *Hop) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[3]
+	mi := &file_ppp_v1_data_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -288,7 +644,7 @@ func (x *Hop) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hop.ProtoReflect.Descriptor instead.
 func (*Hop) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{3}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Hop) GetNodeId() string {
@@ -318,7 +674,7 @@ type GetPieceResponse struct {
 
 func (x *GetPieceResponse) Reset() {
 	*x = GetPieceResponse{}
-	mi := &file_ppp_v1_data_proto_msgTypes[4]
+	mi := &file_ppp_v1_data_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +686,7 @@ func (x *GetPieceResponse) String() string {
 func (*GetPieceResponse) ProtoMessage() {}
 
 func (x *GetPieceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[4]
+	mi := &file_ppp_v1_data_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +699,7 @@ func (x *GetPieceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPieceResponse.ProtoReflect.Descriptor instead.
 func (*GetPieceResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{4}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetPieceResponse) GetResult() isGetPieceResponse_Result {
@@ -397,7 +753,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_ppp_v1_data_proto_msgTypes[5]
+	mi := &file_ppp_v1_data_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -409,7 +765,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[5]
+	mi := &file_ppp_v1_data_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -422,7 +778,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{5}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Error) GetCode() Error_ErrorCode {
@@ -451,7 +807,7 @@ type DownloadFileRequest struct {
 
 func (x *DownloadFileRequest) Reset() {
 	*x = DownloadFileRequest{}
-	mi := &file_ppp_v1_data_proto_msgTypes[6]
+	mi := &file_ppp_v1_data_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +819,7 @@ func (x *DownloadFileRequest) String() string {
 func (*DownloadFileRequest) ProtoMessage() {}
 
 func (x *DownloadFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[6]
+	mi := &file_ppp_v1_data_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +832,7 @@ func (x *DownloadFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadFileRequest.ProtoReflect.Descriptor instead.
 func (*DownloadFileRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{6}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DownloadFileRequest) GetKey() *TreeKey {
@@ -519,7 +875,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_ppp_v1_data_proto_msgTypes[7]
+	mi := &file_ppp_v1_data_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -531,7 +887,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[7]
+	mi := &file_ppp_v1_data_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -544,7 +900,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{7}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SubscribeRequest) GetKey() *TreeKey {
@@ -586,7 +942,7 @@ type SubscribeResponse struct {
 
 func (x *SubscribeResponse) Reset() {
 	*x = SubscribeResponse{}
-	mi := &file_ppp_v1_data_proto_msgTypes[8]
+	mi := &file_ppp_v1_data_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +954,7 @@ func (x *SubscribeResponse) String() string {
 func (*SubscribeResponse) ProtoMessage() {}
 
 func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[8]
+	mi := &file_ppp_v1_data_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +967,7 @@ func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeResponse.ProtoReflect.Descriptor instead.
 func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{8}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SubscribeResponse) GetAccepted() bool {
@@ -646,7 +1002,7 @@ type UnsubscribeRequest struct {
 
 func (x *UnsubscribeRequest) Reset() {
 	*x = UnsubscribeRequest{}
-	mi := &file_ppp_v1_data_proto_msgTypes[9]
+	mi := &file_ppp_v1_data_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -658,7 +1014,7 @@ func (x *UnsubscribeRequest) String() string {
 func (*UnsubscribeRequest) ProtoMessage() {}
 
 func (x *UnsubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[9]
+	mi := &file_ppp_v1_data_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -671,7 +1027,7 @@ func (x *UnsubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeRequest.ProtoReflect.Descriptor instead.
 func (*UnsubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{9}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UnsubscribeRequest) GetKey() *TreeKey {
@@ -704,7 +1060,7 @@ type UnsubscribeResponse struct {
 
 func (x *UnsubscribeResponse) Reset() {
 	*x = UnsubscribeResponse{}
-	mi := &file_ppp_v1_data_proto_msgTypes[10]
+	mi := &file_ppp_v1_data_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -716,7 +1072,7 @@ func (x *UnsubscribeResponse) String() string {
 func (*UnsubscribeResponse) ProtoMessage() {}
 
 func (x *UnsubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ppp_v1_data_proto_msgTypes[10]
+	mi := &file_ppp_v1_data_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -729,7 +1085,7 @@ func (x *UnsubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeResponse.ProtoReflect.Descriptor instead.
 func (*UnsubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_ppp_v1_data_proto_rawDescGZIP(), []int{10}
+	return file_ppp_v1_data_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UnsubscribeResponse) GetOk() bool {
@@ -743,29 +1099,57 @@ var File_ppp_v1_data_proto protoreflect.FileDescriptor
 
 const file_ppp_v1_data_proto_rawDesc = "" +
 	"\n" +
-	"\x11ppp/v1/data.proto\x12\x06ppp.v1\x1a\x13ppp/v1/common.proto\"7\n" +
+	"\x11ppp/v1/data.proto\x12\x06ppp.v1\x1a\x13ppp/v1/common.proto\"\xfb\x01\n" +
+	"\bFileInfo\x12!\n" +
+	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x1b\n" +
+	"\tfile_size\x18\x02 \x01(\x03R\bfileSize\x12\x1d\n" +
+	"\n" +
+	"piece_size\x18\x03 \x01(\x03R\tpieceSize\x12\x1f\n" +
+	"\vpiece_count\x18\x04 \x01(\x03R\n" +
+	"pieceCount\x12\x1f\n" +
+	"\vmetadata_id\x18\x05 \x01(\fR\n" +
+	"metadataId\x12#\n" +
+	"\rmetadata_size\x18\x06 \x01(\x03R\fmetadataSize\x12)\n" +
+	"\x10digest_algorithm\x18\a \x01(\tR\x0fdigestAlgorithm\"\\\n" +
+	"\rMetadataChunk\x12\x1f\n" +
+	"\vmetadata_id\x18\x01 \x01(\fR\n" +
+	"metadataId\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"7\n" +
+	"\x12GetFileInfoRequest\x12!\n" +
+	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\"n\n" +
+	"\x13GetFileInfoResponse\x12&\n" +
+	"\x04info\x18\x01 \x01(\v2\x10.ppp.v1.FileInfoH\x00R\x04info\x12%\n" +
+	"\x05error\x18\x02 \x01(\v2\r.ppp.v1.ErrorH\x00R\x05errorB\b\n" +
+	"\x06result\"X\n" +
+	"\x12GetMetadataRequest\x12!\n" +
+	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x1f\n" +
+	"\vmetadata_id\x18\x02 \x01(\fR\n" +
+	"metadataId\"7\n" +
 	"\x12ResolvePathRequest\x12!\n" +
 	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\"J\n" +
 	"\x13ResolvePathResponse\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x01 \x01(\tR\tlocalPath\x12\x14\n" +
-	"\x05exist\x18\x02 \x01(\bR\x05exist\"\x96\x01\n" +
+	"\x05exist\x18\x02 \x01(\bR\x05exist\"\xb7\x01\n" +
 	"\x0fGetPieceRequest\x12!\n" +
 	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x03R\x05index\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x15\n" +
 	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12\x1f\n" +
-	"\x04from\x18\x05 \x03(\v2\v.ppp.v1.HopR\x04from\"5\n" +
+	"\x04from\x18\x05 \x03(\v2\v.ppp.v1.HopR\x04from\x12\x1f\n" +
+	"\vmetadata_id\x18\x06 \x01(\fR\n" +
+	"metadataId\"5\n" +
 	"\x03Hop\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\"j\n" +
 	"\x10GetPieceResponse\x12%\n" +
 	"\x05piece\x18\x01 \x01(\v2\r.ppp.v1.PieceH\x00R\x05piece\x12%\n" +
 	"\x05error\x18\x02 \x01(\v2\r.ppp.v1.ErrorH\x00R\x05errorB\b\n" +
-	"\x06result\"\xc4\x01\n" +
+	"\x06result\"\xb5\x02\n" +
 	"\x05Error\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.ppp.v1.Error.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"t\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xe4\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\n" +
 	"\n" +
@@ -773,7 +1157,13 @@ const file_ppp_v1_data_proto_rawDesc = "" +
 	"\tNOT_FOUND\x10\x02\x12\x11\n" +
 	"\rLOOP_DETECTED\x10\x03\x12\x0f\n" +
 	"\vBAD_REQUEST\x10\x04\x12\f\n" +
-	"\bINTERNAL\x10\x05\"\x84\x01\n" +
+	"\bINTERNAL\x10\x05\x12\r\n" +
+	"\tNOT_READY\x10\x06\x12\x14\n" +
+	"\x10CONTENT_CONFLICT\x10\a\x12\x14\n" +
+	"\x10METADATA_CORRUPT\x10\b\x12\x19\n" +
+	"\x15PIECE_DIGEST_MISMATCH\x10\t\x12\x18\n" +
+	"\x14FILE_DIGEST_MISMATCH\x10\n" +
+	"\"\x84\x01\n" +
 	"\x13DownloadFileRequest\x12!\n" +
 	"\x03key\x18\x01 \x01(\v2\x0f.ppp.v1.TreeKeyR\x03key\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x12\x15\n" +
@@ -793,13 +1183,15 @@ const file_ppp_v1_data_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\"\n" +
 	"\rchild_node_id\x18\x03 \x01(\tR\vchildNodeId\"%\n" +
 	"\x13UnsubscribeResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xdd\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xe9\x03\n" +
 	"\x04Data\x12=\n" +
 	"\bGetPiece\x12\x17.ppp.v1.GetPieceRequest\x1a\x18.ppp.v1.GetPieceResponse\x12D\n" +
 	"\fDownloadFile\x12\x1b.ppp.v1.DownloadFileRequest\x1a\x15.ppp.v1.ProgressState0\x01\x12@\n" +
 	"\tSubscribe\x12\x18.ppp.v1.SubscribeRequest\x1a\x19.ppp.v1.SubscribeResponse\x12F\n" +
 	"\vUnsubscribe\x12\x1a.ppp.v1.UnsubscribeRequest\x1a\x1b.ppp.v1.UnsubscribeResponse\x12F\n" +
-	"\vResolvePath\x12\x1a.ppp.v1.ResolvePathRequest\x1a\x1b.ppp.v1.ResolvePathResponseB&Z$github.com/akzj/ppp/gen/ppp/v1;pppv1b\x06proto3"
+	"\vResolvePath\x12\x1a.ppp.v1.ResolvePathRequest\x1a\x1b.ppp.v1.ResolvePathResponse\x12F\n" +
+	"\vGetFileInfo\x12\x1a.ppp.v1.GetFileInfoRequest\x1a\x1b.ppp.v1.GetFileInfoResponse\x12B\n" +
+	"\vGetMetadata\x12\x1a.ppp.v1.GetMetadataRequest\x1a\x15.ppp.v1.MetadataChunk0\x01B&Z$github.com/akzj/ppp/gen/ppp/v1;pppv1b\x06proto3"
 
 var (
 	file_ppp_v1_data_proto_rawDescOnce sync.Once
@@ -814,50 +1206,64 @@ func file_ppp_v1_data_proto_rawDescGZIP() []byte {
 }
 
 var file_ppp_v1_data_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ppp_v1_data_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_ppp_v1_data_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_ppp_v1_data_proto_goTypes = []any{
 	(Error_ErrorCode)(0),        // 0: ppp.v1.Error.ErrorCode
-	(*ResolvePathRequest)(nil),  // 1: ppp.v1.ResolvePathRequest
-	(*ResolvePathResponse)(nil), // 2: ppp.v1.ResolvePathResponse
-	(*GetPieceRequest)(nil),     // 3: ppp.v1.GetPieceRequest
-	(*Hop)(nil),                 // 4: ppp.v1.Hop
-	(*GetPieceResponse)(nil),    // 5: ppp.v1.GetPieceResponse
-	(*Error)(nil),               // 6: ppp.v1.Error
-	(*DownloadFileRequest)(nil), // 7: ppp.v1.DownloadFileRequest
-	(*SubscribeRequest)(nil),    // 8: ppp.v1.SubscribeRequest
-	(*SubscribeResponse)(nil),   // 9: ppp.v1.SubscribeResponse
-	(*UnsubscribeRequest)(nil),  // 10: ppp.v1.UnsubscribeRequest
-	(*UnsubscribeResponse)(nil), // 11: ppp.v1.UnsubscribeResponse
-	(*TreeKey)(nil),             // 12: ppp.v1.TreeKey
-	(*Piece)(nil),               // 13: ppp.v1.Piece
-	(*ProgressState)(nil),       // 14: ppp.v1.ProgressState
+	(*FileInfo)(nil),            // 1: ppp.v1.FileInfo
+	(*MetadataChunk)(nil),       // 2: ppp.v1.MetadataChunk
+	(*GetFileInfoRequest)(nil),  // 3: ppp.v1.GetFileInfoRequest
+	(*GetFileInfoResponse)(nil), // 4: ppp.v1.GetFileInfoResponse
+	(*GetMetadataRequest)(nil),  // 5: ppp.v1.GetMetadataRequest
+	(*ResolvePathRequest)(nil),  // 6: ppp.v1.ResolvePathRequest
+	(*ResolvePathResponse)(nil), // 7: ppp.v1.ResolvePathResponse
+	(*GetPieceRequest)(nil),     // 8: ppp.v1.GetPieceRequest
+	(*Hop)(nil),                 // 9: ppp.v1.Hop
+	(*GetPieceResponse)(nil),    // 10: ppp.v1.GetPieceResponse
+	(*Error)(nil),               // 11: ppp.v1.Error
+	(*DownloadFileRequest)(nil), // 12: ppp.v1.DownloadFileRequest
+	(*SubscribeRequest)(nil),    // 13: ppp.v1.SubscribeRequest
+	(*SubscribeResponse)(nil),   // 14: ppp.v1.SubscribeResponse
+	(*UnsubscribeRequest)(nil),  // 15: ppp.v1.UnsubscribeRequest
+	(*UnsubscribeResponse)(nil), // 16: ppp.v1.UnsubscribeResponse
+	(*TreeKey)(nil),             // 17: ppp.v1.TreeKey
+	(*Piece)(nil),               // 18: ppp.v1.Piece
+	(*ProgressState)(nil),       // 19: ppp.v1.ProgressState
 }
 var file_ppp_v1_data_proto_depIdxs = []int32{
-	12, // 0: ppp.v1.ResolvePathRequest.key:type_name -> ppp.v1.TreeKey
-	12, // 1: ppp.v1.GetPieceRequest.key:type_name -> ppp.v1.TreeKey
-	4,  // 2: ppp.v1.GetPieceRequest.from:type_name -> ppp.v1.Hop
-	13, // 3: ppp.v1.GetPieceResponse.piece:type_name -> ppp.v1.Piece
-	6,  // 4: ppp.v1.GetPieceResponse.error:type_name -> ppp.v1.Error
-	0,  // 5: ppp.v1.Error.code:type_name -> ppp.v1.Error.ErrorCode
-	12, // 6: ppp.v1.DownloadFileRequest.key:type_name -> ppp.v1.TreeKey
-	4,  // 7: ppp.v1.DownloadFileRequest.from:type_name -> ppp.v1.Hop
-	12, // 8: ppp.v1.SubscribeRequest.key:type_name -> ppp.v1.TreeKey
-	12, // 9: ppp.v1.UnsubscribeRequest.key:type_name -> ppp.v1.TreeKey
-	3,  // 10: ppp.v1.Data.GetPiece:input_type -> ppp.v1.GetPieceRequest
-	7,  // 11: ppp.v1.Data.DownloadFile:input_type -> ppp.v1.DownloadFileRequest
-	8,  // 12: ppp.v1.Data.Subscribe:input_type -> ppp.v1.SubscribeRequest
-	10, // 13: ppp.v1.Data.Unsubscribe:input_type -> ppp.v1.UnsubscribeRequest
-	1,  // 14: ppp.v1.Data.ResolvePath:input_type -> ppp.v1.ResolvePathRequest
-	5,  // 15: ppp.v1.Data.GetPiece:output_type -> ppp.v1.GetPieceResponse
-	14, // 16: ppp.v1.Data.DownloadFile:output_type -> ppp.v1.ProgressState
-	9,  // 17: ppp.v1.Data.Subscribe:output_type -> ppp.v1.SubscribeResponse
-	11, // 18: ppp.v1.Data.Unsubscribe:output_type -> ppp.v1.UnsubscribeResponse
-	2,  // 19: ppp.v1.Data.ResolvePath:output_type -> ppp.v1.ResolvePathResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	17, // 0: ppp.v1.FileInfo.key:type_name -> ppp.v1.TreeKey
+	17, // 1: ppp.v1.GetFileInfoRequest.key:type_name -> ppp.v1.TreeKey
+	1,  // 2: ppp.v1.GetFileInfoResponse.info:type_name -> ppp.v1.FileInfo
+	11, // 3: ppp.v1.GetFileInfoResponse.error:type_name -> ppp.v1.Error
+	17, // 4: ppp.v1.GetMetadataRequest.key:type_name -> ppp.v1.TreeKey
+	17, // 5: ppp.v1.ResolvePathRequest.key:type_name -> ppp.v1.TreeKey
+	17, // 6: ppp.v1.GetPieceRequest.key:type_name -> ppp.v1.TreeKey
+	9,  // 7: ppp.v1.GetPieceRequest.from:type_name -> ppp.v1.Hop
+	18, // 8: ppp.v1.GetPieceResponse.piece:type_name -> ppp.v1.Piece
+	11, // 9: ppp.v1.GetPieceResponse.error:type_name -> ppp.v1.Error
+	0,  // 10: ppp.v1.Error.code:type_name -> ppp.v1.Error.ErrorCode
+	17, // 11: ppp.v1.DownloadFileRequest.key:type_name -> ppp.v1.TreeKey
+	9,  // 12: ppp.v1.DownloadFileRequest.from:type_name -> ppp.v1.Hop
+	17, // 13: ppp.v1.SubscribeRequest.key:type_name -> ppp.v1.TreeKey
+	17, // 14: ppp.v1.UnsubscribeRequest.key:type_name -> ppp.v1.TreeKey
+	8,  // 15: ppp.v1.Data.GetPiece:input_type -> ppp.v1.GetPieceRequest
+	12, // 16: ppp.v1.Data.DownloadFile:input_type -> ppp.v1.DownloadFileRequest
+	13, // 17: ppp.v1.Data.Subscribe:input_type -> ppp.v1.SubscribeRequest
+	15, // 18: ppp.v1.Data.Unsubscribe:input_type -> ppp.v1.UnsubscribeRequest
+	6,  // 19: ppp.v1.Data.ResolvePath:input_type -> ppp.v1.ResolvePathRequest
+	3,  // 20: ppp.v1.Data.GetFileInfo:input_type -> ppp.v1.GetFileInfoRequest
+	5,  // 21: ppp.v1.Data.GetMetadata:input_type -> ppp.v1.GetMetadataRequest
+	10, // 22: ppp.v1.Data.GetPiece:output_type -> ppp.v1.GetPieceResponse
+	19, // 23: ppp.v1.Data.DownloadFile:output_type -> ppp.v1.ProgressState
+	14, // 24: ppp.v1.Data.Subscribe:output_type -> ppp.v1.SubscribeResponse
+	16, // 25: ppp.v1.Data.Unsubscribe:output_type -> ppp.v1.UnsubscribeResponse
+	7,  // 26: ppp.v1.Data.ResolvePath:output_type -> ppp.v1.ResolvePathResponse
+	4,  // 27: ppp.v1.Data.GetFileInfo:output_type -> ppp.v1.GetFileInfoResponse
+	2,  // 28: ppp.v1.Data.GetMetadata:output_type -> ppp.v1.MetadataChunk
+	22, // [22:29] is the sub-list for method output_type
+	15, // [15:22] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_ppp_v1_data_proto_init() }
@@ -866,7 +1272,11 @@ func file_ppp_v1_data_proto_init() {
 		return
 	}
 	file_ppp_v1_common_proto_init()
-	file_ppp_v1_data_proto_msgTypes[4].OneofWrappers = []any{
+	file_ppp_v1_data_proto_msgTypes[3].OneofWrappers = []any{
+		(*GetFileInfoResponse_Info)(nil),
+		(*GetFileInfoResponse_Error)(nil),
+	}
+	file_ppp_v1_data_proto_msgTypes[9].OneofWrappers = []any{
 		(*GetPieceResponse_Piece)(nil),
 		(*GetPieceResponse_Error)(nil),
 	}
@@ -876,7 +1286,7 @@ func file_ppp_v1_data_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ppp_v1_data_proto_rawDesc), len(file_ppp_v1_data_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -24,6 +24,8 @@ const (
 	Data_Subscribe_FullMethodName    = "/ppp.v1.Data/Subscribe"
 	Data_Unsubscribe_FullMethodName  = "/ppp.v1.Data/Unsubscribe"
 	Data_ResolvePath_FullMethodName  = "/ppp.v1.Data/ResolvePath"
+	Data_GetFileInfo_FullMethodName  = "/ppp.v1.Data/GetFileInfo"
+	Data_GetMetadata_FullMethodName  = "/ppp.v1.Data/GetMetadata"
 )
 
 // DataClient is the client API for Data service.
@@ -52,6 +54,13 @@ type DataClient interface {
 	Unsubscribe(ctx context.Context, in *UnsubscribeRequest, opts ...grpc.CallOption) (*UnsubscribeResponse, error)
 	// Resolve the final on-disk path of a file on this node.
 	ResolvePath(ctx context.Context, in *ResolvePathRequest, opts ...grpc.CallOption) (*ResolvePathResponse, error)
+	// File metadata (file-distribution core §5.1): GetFileInfo returns the
+	// sealed artifact's info (metadata_id identifies the immutable metadata
+	// bytes); GetMetadata streams those bytes. A node binds exactly one
+	// metadata_id per download; GetPiece requests carry it so an upstream
+	// refuses pieces whose metadata differs (CONTENT_CONFLICT).
+	GetFileInfo(ctx context.Context, in *GetFileInfoRequest, opts ...grpc.CallOption) (*GetFileInfoResponse, error)
+	GetMetadata(ctx context.Context, in *GetMetadataRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MetadataChunk], error)
 }
 
 type dataClient struct {
@@ -121,6 +130,35 @@ func (c *dataClient) ResolvePath(ctx context.Context, in *ResolvePathRequest, op
 	return out, nil
 }
 
+func (c *dataClient) GetFileInfo(ctx context.Context, in *GetFileInfoRequest, opts ...grpc.CallOption) (*GetFileInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFileInfoResponse)
+	err := c.cc.Invoke(ctx, Data_GetFileInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataClient) GetMetadata(ctx context.Context, in *GetMetadataRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MetadataChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Data_ServiceDesc.Streams[1], Data_GetMetadata_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetMetadataRequest, MetadataChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Data_GetMetadataClient = grpc.ServerStreamingClient[MetadataChunk]
+
 // DataServer is the server API for Data service.
 // All implementations must embed UnimplementedDataServer
 // for forward compatibility.
@@ -147,6 +185,13 @@ type DataServer interface {
 	Unsubscribe(context.Context, *UnsubscribeRequest) (*UnsubscribeResponse, error)
 	// Resolve the final on-disk path of a file on this node.
 	ResolvePath(context.Context, *ResolvePathRequest) (*ResolvePathResponse, error)
+	// File metadata (file-distribution core §5.1): GetFileInfo returns the
+	// sealed artifact's info (metadata_id identifies the immutable metadata
+	// bytes); GetMetadata streams those bytes. A node binds exactly one
+	// metadata_id per download; GetPiece requests carry it so an upstream
+	// refuses pieces whose metadata differs (CONTENT_CONFLICT).
+	GetFileInfo(context.Context, *GetFileInfoRequest) (*GetFileInfoResponse, error)
+	GetMetadata(*GetMetadataRequest, grpc.ServerStreamingServer[MetadataChunk]) error
 	mustEmbedUnimplementedDataServer()
 }
 
@@ -171,6 +216,12 @@ func (UnimplementedDataServer) Unsubscribe(context.Context, *UnsubscribeRequest)
 }
 func (UnimplementedDataServer) ResolvePath(context.Context, *ResolvePathRequest) (*ResolvePathResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePath not implemented")
+}
+func (UnimplementedDataServer) GetFileInfo(context.Context, *GetFileInfoRequest) (*GetFileInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFileInfo not implemented")
+}
+func (UnimplementedDataServer) GetMetadata(*GetMetadataRequest, grpc.ServerStreamingServer[MetadataChunk]) error {
+	return status.Error(codes.Unimplemented, "method GetMetadata not implemented")
 }
 func (UnimplementedDataServer) mustEmbedUnimplementedDataServer() {}
 func (UnimplementedDataServer) testEmbeddedByValue()              {}
@@ -276,6 +327,35 @@ func _Data_ResolvePath_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Data_GetFileInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFileInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServer).GetFileInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Data_GetFileInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServer).GetFileInfo(ctx, req.(*GetFileInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Data_GetMetadata_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetMetadataRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DataServer).GetMetadata(m, &grpc.GenericServerStream[GetMetadataRequest, MetadataChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Data_GetMetadataServer = grpc.ServerStreamingServer[MetadataChunk]
+
 // Data_ServiceDesc is the grpc.ServiceDesc for Data service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -299,11 +379,20 @@ var Data_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ResolvePath",
 			Handler:    _Data_ResolvePath_Handler,
 		},
+		{
+			MethodName: "GetFileInfo",
+			Handler:    _Data_GetFileInfo_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "DownloadFile",
 			Handler:       _Data_DownloadFile_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "GetMetadata",
+			Handler:       _Data_GetMetadata_Handler,
 			ServerStreams: true,
 		},
 	},

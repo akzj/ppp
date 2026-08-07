@@ -138,9 +138,8 @@ message CreateJobRequest {
   string tree_id = 1;
   string filename = 2;
   int64 size = 3;
-  string md5 = 4;
-  Source source = 5;              // override tree default source (optional)
-  repeated string target_node_ids = 6; // empty = whole tree
+  Source source = 4;              // override tree default source (optional)
+  repeated string target_node_ids = 5; // empty = whole tree
 }
 message CreateJobResponse {
   Job job = 1;
