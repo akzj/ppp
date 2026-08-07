@@ -279,15 +279,19 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 	if data, err := d.store.Get(d.filename, index); err == nil {
 		return data, nil
 	}
+
+	w := &pieceWaiter{ch: make(chan error, 1)}
+	d.mu.Lock()
 	if index < 0 || index >= d.numPieces {
 		// A second request for the same file with a LARGER size is the common
 		// cause: ensureSizeLocked only records the first size, so the extra
 		// pieces are unknown. Hint at the mismatch so the caller can fix it.
-		return nil, fmt.Errorf("%w: piece %d out of range (file size %d; a larger second size is a size mismatch)", errPieceFailed, index, d.size)
+		// (numPieces/size are read under the lock — the C4 metadata bind can
+		// resize the downloader concurrently.)
+		size := d.size
+		d.mu.Unlock()
+		return nil, fmt.Errorf("%w: piece %d out of range (file size %d; a larger second size is a size mismatch)", errPieceFailed, index, size)
 	}
-
-	w := &pieceWaiter{ch: make(chan error, 1)}
-	d.mu.Lock()
 	if d.fileErr != nil {
 		err := d.fileErr
 		d.mu.Unlock()
@@ -925,7 +929,14 @@ func (d *Downloader) releaseUpstreamLeases() {
 // fetchOnce fetches one piece from the source (primary root) or from the
 // upstream parents.
 func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
-	if d.topo.PullFromSource() {
+	// C4 (§5.2f): once the authoritative metadata is bound from an upstream
+	// (including a root that copied from a sibling — the failover case), the
+	// pieces come from the upstreams; only a root that self-builds (no bound
+	// metadata) pulls from the source.
+	d.mu.Lock()
+	bound := d.meta != nil
+	d.mu.Unlock()
+	if d.topo.PullFromSource() && !bound {
 		if d.treeSource == nil {
 			return nil, errors.New("agent: pull-from-source but no source configured")
 		}
@@ -940,6 +951,14 @@ func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
 	for _, addr := range upstreams {
 		data, err := d.fetchFromPeer(addr, index)
 		if err == nil {
+			// C4 (§5.2e): verify the piece SHA-256 against the bound
+			// metadata BEFORE accepting it from this upstream; a mismatch is
+			// PIECE_DIGEST_MISMATCH and the fetch switches to the next
+			// upstream (the piece is discarded, never stored).
+			if verr := d.verifyPieceDigest(index, data); verr != nil {
+				lastErr = verr
+				continue
+			}
 			return data, nil
 		}
 		lastErr = err

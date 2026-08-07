@@ -43,6 +43,12 @@ type fakeDataServer struct {
 	unsubscribes  int
 	release       chan struct{} // when set, GetPiece blocks until released or ctx done
 	lastFrom      []*pppv1.Hop
+	// corruptPiece serves tampered piece bytes (their SHA-256 will not match
+	// the metadata built from f.pieces): used for PIECE_DIGEST_MISMATCH tests.
+	corruptPiece bool
+	// diffMetaID serves a GetPiece whose artifact metadata_id differs from the
+	// one served by GetFileInfo (a content conflict, §5.3).
+	diffMetaID bool
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -216,6 +222,19 @@ func (f *fakeDataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceReques
 		return &pppv1.GetPieceResponse{Result: &pppv1.GetPieceResponse_Error{
 			Error: &pppv1.Error{Code: pppv1.Error_NOT_FOUND},
 		}}, nil
+	}
+	// C4: an upstream whose artifact metadata_id differs from the request's
+	// bound id returns CONTENT_CONFLICT (never mixes content, §5.3).
+	if f.diffMetaID && len(req.GetMetadataId()) > 0 {
+		return &pppv1.GetPieceResponse{Result: &pppv1.GetPieceResponse_Error{
+			Error: &pppv1.Error{Code: pppv1.Error_CONTENT_CONFLICT, Message: "content conflict"},
+		}}, nil
+	}
+	if f.corruptPiece {
+		data = append([]byte{}, data...)
+		for i := range data {
+			data[i] ^= 0xFF
+		}
 	}
 	h := crc64.Checksum(data, crcTable)
 	if zeroHash {
