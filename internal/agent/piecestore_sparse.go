@@ -361,8 +361,10 @@ func (s *sparsePieceStore) sealedOnDisk(filename string) bool {
 		return false
 	}
 	// P3 defense: the final's size must match the metadata's FileSize, so a
-	// truncated/corrupt data file is never reported sealed.
-	if stat.Size() != m.FileSize {
+	// truncated/corrupt data file is never reported sealed. P1-1: the sidecar
+	// must describe the file it sits under (a mismatched filename is not a
+	// sealed artifact for this key).
+	if m.Filename != filename || stat.Size() != m.FileSize {
 		return false
 	}
 	commitData, err := os.ReadFile(commitPath)
@@ -473,11 +475,18 @@ func (s *sparsePieceStore) openCompleteLocked(f *sparseFile) (*sparseFile, error
 		return nil, err
 	}
 	// P3 defense: the final's size must match the sealed metadata's FileSize;
-	// a truncated/corrupt data file is never served.
+	// a truncated/corrupt data file is never served. P1-1: the sidecar must
+	// describe the file it sits under.
 	if meta, ok, err := s.ReadMetadata(f.filename); err == nil && ok {
-		if m, derr := DecodeMetadata(meta); derr == nil && m.FileSize != stat.Size() {
-			file.Close()
-			return nil, fmt.Errorf("agent: sealed artifact size mismatch: final %d, metadata %d", stat.Size(), m.FileSize)
+		if m, derr := DecodeMetadata(meta); derr == nil {
+			if m.Filename != f.filename {
+				file.Close()
+				return nil, fmt.Errorf("agent: sealed artifact filename mismatch: sidecar %q, key %q", m.Filename, f.filename)
+			}
+			if m.FileSize != stat.Size() {
+				file.Close()
+				return nil, fmt.Errorf("agent: sealed artifact size mismatch: final %d, metadata %d", stat.Size(), m.FileSize)
+			}
 		}
 	}
 	return &sparseFile{

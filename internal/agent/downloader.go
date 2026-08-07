@@ -596,6 +596,13 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	// P1-2: bound the accumulation by the advertised metadata size (capped) so
+	// a buggy/malicious upstream cannot stream arbitrary bytes and OOM the
+	// receiver before the hash check; over-limit is METADATA_CORRUPT.
+	limit := info.GetMetadataSize()
+	if limit <= 0 || limit > maxMetadataSize {
+		limit = maxMetadataSize
+	}
 	var buf []byte
 	for {
 		chunk, err := stream.Recv()
@@ -605,6 +612,9 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 		if err != nil {
 			return nil, nil, 0, err
 		}
+		if int64(len(buf))+int64(len(chunk.GetData())) > limit {
+			return nil, nil, 0, fmt.Errorf("%w: metadata stream exceeds the advertised size %d", errMetadataCorrupt, limit)
+		}
 		buf = append(buf, chunk.GetData()...)
 	}
 	if !bytes.Equal(MetadataID(buf), info.GetMetadataId()) {
@@ -613,6 +623,11 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 	meta, err := DecodeMetadata(buf)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("%w: %v", errMetadataCorrupt, err)
+	}
+	// P1-1: the metadata must describe the file we asked for — never bind or
+	// seal one artifact's metadata under another filename.
+	if meta.Filename != d.filename {
+		return nil, nil, 0, fmt.Errorf("%w: metadata filename %q != requested %q", errMetadataCorrupt, meta.Filename, d.filename)
 	}
 	if meta.FileSize != info.GetFileSize() {
 		return nil, nil, 0, fmt.Errorf("%w: file size %d != info %d", errMetadataCorrupt, meta.FileSize, info.GetFileSize())
@@ -844,6 +859,10 @@ func (d *Downloader) pieceStored(index int64) {
 
 // leaseRPCTimeout bounds each upstream lease RPC.
 const leaseRPCTimeout = 5 * time.Second
+
+// maxMetadataSize caps a copied metadata stream (a buggy/malicious upstream
+// must not be able to OOM the receiver before the hash check).
+const maxMetadataSize = 64 << 20
 
 // ensureUpstreamLeases renews this node's subscription to every upstream for
 // this file (at most once per leaseTTL/2) while it is fetching. Parents keep

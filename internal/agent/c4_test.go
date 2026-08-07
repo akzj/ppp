@@ -3,7 +3,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"os"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -403,5 +405,124 @@ func TestDownloaderMetadataCorrupt(t *testing.T) {
 	sp := store.(*sparsePieceStore)
 	if sp.HasPiece("a.bin", 0) {
 		t.Fatal("a piece was fetched despite corrupt metadata")
+	}
+}
+
+// TestDownloaderMetadataFilenameMismatch locks P1-1: an upstream whose
+// metadata claims a different filename than the requested key is rejected
+// (METADATA_CORRUPT) — never bound or sealed.
+func TestDownloaderMetadataFilenameMismatch(t *testing.T) {
+	content := c3Content()
+	bad := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}, wrongFilename: "other.bin"}
+	addr, stop := startFakeData(t, bad)
+	defer stop()
+
+	store, err := NewFilePieceStore(newTestStoreDir(t))
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{data: nil}, nil, "member", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+
+	time.Sleep(1500 * time.Millisecond)
+	if store.IsComplete("a.bin") {
+		t.Fatal("mismatched-filename metadata was sealed")
+	}
+	sp := store.(*sparsePieceStore)
+	if sp.HasPiece("a.bin", 0) {
+		t.Fatal("a piece was fetched despite mismatched-filename metadata")
+	}
+}
+
+// TestDownloaderMetadataStreamOverLimit locks P1-2: an upstream that advertises
+// a tiny MetadataSize but streams a large metadata must be rejected fast
+// (METADATA_CORRUPT) — no unbounded accumulation.
+func TestDownloaderMetadataStreamOverLimit(t *testing.T) {
+	content := c3Content()
+	bad := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}, overSizedMeta: true}
+	addr, stop := startFakeData(t, bad)
+	defer stop()
+
+	store, err := NewFilePieceStore(newTestStoreDir(t))
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{data: nil}, nil, "member", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+
+	time.Sleep(1500 * time.Millisecond)
+	if store.IsComplete("a.bin") {
+		t.Fatal("over-limit metadata stream was sealed")
+	}
+	sp := store.(*sparsePieceStore)
+	if sp.HasPiece("a.bin", 0) {
+		t.Fatal("a piece was fetched despite an over-limit metadata stream")
+	}
+}
+
+// TestSparseStoreSealedOnDiskRejectsFilenameMismatch locks the sealedOnDisk
+// filename cross-check (P1-1): a sidecar claiming a different filename is not
+// reported sealed even when its commit matches.
+func TestSparseStoreSealedOnDiskRejectsFilenameMismatch(t *testing.T) {
+	dir := t.TempDir()
+	st, err := NewFilePieceStore(dir)
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	p0 := bytes.Repeat([]byte("a"), int(PieceSize))
+	if err := st.Put("a.bin", 0, p0); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	// Build a metadata for a DIFFERENT filename + write it as a.bin's sidecar
+	// with a matching commit: sealedOnDisk must reject the filename mismatch.
+	h := sha256.Sum256(p0)
+	fileHash := sha256.New()
+	fileHash.Write(p0)
+	m, err := BuildMetadata("other.bin", int64(len(p0)), PieceSize, [][]byte{h[:]}, fileHash.Sum(nil))
+	if err != nil {
+		t.Fatalf("BuildMetadata: %v", err)
+	}
+	metaBytes, err := m.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	sp := st.(*sparsePieceStore)
+	_, metadataPath, commitPath := artifactPaths(sp.dir, "a.bin")
+	_, _, finalPath := sparseFilePaths(sp.dir, "a.bin")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	piecesPath, _, _ := sparseFilePaths(sp.dir, "a.bin")
+	if err := os.Rename(piecesPath, finalPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	commitData, err := EncodeCommit(MetadataID(metaBytes))
+	if err != nil {
+		t.Fatalf("EncodeCommit: %v", err)
+	}
+	if err := os.WriteFile(commitPath, commitData, 0o644); err != nil {
+		t.Fatalf("write commit: %v", err)
+	}
+	if sp.IsComplete("a.bin") {
+		t.Fatal("a sidecar claiming a different filename was reported sealed")
 	}
 }

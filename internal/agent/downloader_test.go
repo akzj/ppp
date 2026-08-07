@@ -52,6 +52,13 @@ type fakeDataServer struct {
 	// corruptMeta serves GetMetadata bytes whose SHA-256 does not match the
 	// metadata_id advertised by GetFileInfo (a corrupt metadata copy).
 	corruptMeta bool
+	// wrongFilename builds the metadata for a different filename than the key
+	// (P1-1: the metadata claims a filename that is not the requested one).
+	wrongFilename string
+	// overSizedMeta advertises a tiny MetadataSize in GetFileInfo while
+	// GetMetadata streams the full bytes (P1-2: the downloader must bound the
+	// accumulation).
+	overSizedMeta bool
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -77,7 +84,11 @@ func (f *fakeDataServer) buildMetadata(treeID, filename string) ([]byte, *pppv1.
 	if len(digests) == 0 {
 		return nil, nil, fmt.Errorf("fake: no pieces for %s/%s", treeID, filename)
 	}
-	m, err := BuildMetadata(filename, size, PieceSize, digests, fileHash.Sum(nil))
+	metaFilename := filename
+	if f.wrongFilename != "" {
+		metaFilename = f.wrongFilename
+	}
+	m, err := BuildMetadata(metaFilename, size, PieceSize, digests, fileHash.Sum(nil))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,13 +96,17 @@ func (f *fakeDataServer) buildMetadata(treeID, filename string) ([]byte, *pppv1.
 	if err != nil {
 		return nil, nil, err
 	}
+	metaSize := int64(len(metaBytes))
+	if f.overSizedMeta {
+		metaSize = 1
+	}
 	info := &pppv1.FileInfo{
 		Key:             &pppv1.TreeKey{TreeId: treeID, Filename: filename},
 		FileSize:        size,
 		PieceSize:       PieceSize,
 		PieceCount:      int64(len(digests)),
 		MetadataId:      MetadataID(metaBytes),
-		MetadataSize:    int64(len(metaBytes)),
+		MetadataSize:    metaSize,
 		DigestAlgorithm: DigestAlgorithmSHA256,
 	}
 	return metaBytes, info, nil
