@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash/crc64"
@@ -100,10 +101,15 @@ type Downloader struct {
 	cooldown        map[int64]time.Time // pieces not re-dispatched before this time
 	cooldownCleared map[int64]bool      // demand already cleared a cooldown once (anti-flood)
 	waiters         map[int64][]*pieceWaiter
-	fileErr         error
-	complete        bool
-	running         bool
-	wakeCh          chan struct{}
+	// pieceHashes[i] is the SHA-256 of stored piece i (C2): accumulated while
+	// the piece is fetched, read back at Seal time for resumed pieces. It is
+	// the basis of the self-built FileMetadataV1. C4 replaces the self-build
+	// with the upstream-copied metadata (same content, same metadata_id).
+	pieceHashes [][]byte
+	fileErr     error
+	complete    bool
+	running     bool
+	wakeCh      chan struct{}
 	// need counts active holders of this file (child subscribers + active
 	// piece waiters); jobNeed marks a root job-driven download. When need
 	// reaches zero and the file is not complete the downloader stops and is
@@ -158,6 +164,7 @@ func (d *Downloader) ensureSizeLocked(size int64) {
 	if d.size == 0 && size > 0 {
 		d.size = size
 		d.numPieces = (size + PieceSize - 1) / PieceSize
+		d.pieceHashes = make([][]byte, d.numPieces)
 	}
 }
 
@@ -459,7 +466,17 @@ func (d *Downloader) nextMissingLocked() int64 {
 	return -1
 }
 
-// checkCompleteLocked marks the file complete when every piece is stored.
+// checkCompleteLocked marks the file complete when every piece is stored and
+// atomically publishes it: the per-piece SHA-256 digests (accumulated while
+// fetching; read back for resumed pieces) are assembled into a FileMetadataV1
+// and the artifact is sealed (data + metadata + commit marker).
+//
+// TRANSITION (C2 -> C4): in C2 the node SELF-BUILDS the metadata from its
+// verified pieces — deterministic, so identical content yields the identical
+// metadata_id. C4 changes the downloader to COPY the upstream metadata before
+// fetching pieces and publish that exact bytes instead; since both describe
+// the same content they carry the same metadata_id, so the transition is
+// conflict-free.
 func (d *Downloader) checkCompleteLocked() {
 	if d.complete || d.fileErr != nil {
 		return
@@ -470,7 +487,42 @@ func (d *Downloader) checkCompleteLocked() {
 		}
 	}
 	d.complete = true
-	_ = d.store.MarkComplete(d.filename, d.size)
+	if err := d.sealAndPublishLocked(); err != nil {
+		d.complete = false
+		d.fileErr = err
+	}
+}
+
+// sealAndPublishLocked builds the FileMetadataV1 from the stored pieces and
+// atomically publishes the artifact. Call with d.mu held.
+func (d *Downloader) sealAndPublishLocked() error {
+	pieceCount := int(d.numPieces)
+	digests := make([][]byte, pieceCount)
+	fileHash := sha256.New()
+	for i := 0; i < pieceCount; i++ {
+		if d.pieceHashes != nil && d.pieceHashes[i] != nil {
+			digests[i] = d.pieceHashes[i]
+		}
+		data, err := d.store.Get(d.filename, int64(i))
+		if err != nil {
+			return fmt.Errorf("agent: seal read piece %d: %w", i, err)
+		}
+		if digests[i] == nil {
+			// Resumed piece: digest the stored bytes now.
+			h := sha256.Sum256(data)
+			digests[i] = h[:]
+		}
+		fileHash.Write(data)
+	}
+	m, err := BuildMetadata(d.filename, d.size, PieceSize, digests, fileHash.Sum(nil))
+	if err != nil {
+		return err
+	}
+	metaBytes, err := m.Encode()
+	if err != nil {
+		return err
+	}
+	return d.store.Seal(d.filename, d.size, metaBytes)
 }
 
 // fetchPiece fetches one piece with retries, stores it and notifies waiters.
@@ -542,6 +594,14 @@ func (d *Downloader) fetchPiece(index int64) {
 	if err := d.store.Put(d.filename, index, data); err != nil {
 		return
 	}
+	// C2: accumulate the piece's SHA-256 as it is stored (CRC64 remains the
+	// transport fast-check; the index still records crc64 existence).
+	h := sha256.Sum256(data)
+	d.mu.Lock()
+	if index >= 0 && index < int64(len(d.pieceHashes)) {
+		d.pieceHashes[index] = h[:]
+	}
+	d.mu.Unlock()
 	d.pieceStored(index)
 }
 
