@@ -27,13 +27,21 @@ type DataServer struct {
 	banned       *BannedList
 	dm           *DownloaderManager
 	leases       *LeaseManager
+	// root marks a primary-root node: BUILDING artifacts (decision 1) are
+	// invisible to GetPiece/GetFileInfo until sealed.
+	root bool
 }
 
-// NewDataServer creates the Data service handler.
+// NewDataServer creates the Data service handler (non-root).
 func NewDataServer(nodeID, treeID, downloadPath string, store PieceStore, banned *BannedList, dm *DownloaderManager, leases *LeaseManager) *DataServer {
+	return newRootDataServer(nodeID, treeID, downloadPath, store, banned, dm, leases, false)
+}
+
+// newRootDataServer constructs a DataServer with an explicit root flag.
+func newRootDataServer(nodeID, treeID, downloadPath string, store PieceStore, banned *BannedList, dm *DownloaderManager, leases *LeaseManager, root bool) *DataServer {
 	return &DataServer{
 		nodeID: nodeID, treeID: treeID, downloadPath: downloadPath,
-		store: store, banned: banned, dm: dm, leases: leases,
+		store: store, banned: banned, dm: dm, leases: leases, root: root,
 	}
 }
 
@@ -85,6 +93,14 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 		return s.pieceResponse(key, req.GetIndex(), data), nil
 	} else if !errors.Is(err, ErrPieceNotFound) {
 		return nil, status.Error(codes.Internal, err.Error())
+	}
+	// BUILDING gate (decision 1, §3.4): a root that is actively building the
+	// artifact must not serve pieces and must not have a GetPiece re-trigger
+	// its build. "No artifact" (no downloader) may still trigger a build via
+	// the back-to-source path below; "building" (a running, unsealed
+	// downloader) is NOT_READY.
+	if s.root && s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
+		return errResp(pppv1.Error_NOT_READY, "artifact is building"), nil
 	}
 	// Subtask back-to-source: ensure the downloader exists and wait for the
 	// piece.

@@ -127,7 +127,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		serverOpts = append(serverOpts, grpc.Creds(a.serverCreds))
 	}
 	a.grpc = grpc.NewServer(serverOpts...)
-	pppv1.RegisterDataServer(a.grpc, NewDataServer(a.nodeID, a.cfg.Tree, a.cfg.DownloadPath, a.store, a.banned, a.dm, a.leases))
+	pppv1.RegisterDataServer(a.grpc, newRootDataServer(a.nodeID, a.cfg.Tree, a.cfg.DownloadPath, a.store, a.banned, a.dm, a.leases, a.cfg.Role == pppv1.Node_ROOT))
 	go func() { _ = a.grpc.Serve(lis) }()
 
 	node := &pppv1.Node{Id: a.nodeID, Addr: a.addr, TreeId: a.cfg.Tree, Role: a.cfg.Role}
