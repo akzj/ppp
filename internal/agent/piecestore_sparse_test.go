@@ -529,3 +529,149 @@ func TestSparseStoreSealCrashRecovery(t *testing.T) {
 		t.Fatal("reopened sealed artifact not complete")
 	}
 }
+
+// TestSparseStoreRecoverInterruptedSeal locks the C2.5 P1 fix: a crash
+// between the rename and the commit-marker write is recognized on the next
+// open.
+//   - final size matches the metadata -> the seal is COMPLETED (commit
+//     written), the data is preserved and a later re-Seal keeps it;
+//   - final size mismatches -> the stale index/metadata/final are cleaned so
+//     the re-download path starts fresh (HasPiece must NOT trust a stale
+//     index over an empty pieces file, and a re-Seal must not destroy data).
+func TestSparseStoreRecoverInterruptedSeal(t *testing.T) {
+	content := [][]byte{bytes.Repeat([]byte("a"), int(PieceSize)), bytes.Repeat([]byte("b"), 10)}
+	size := int64(len(content[0]) + len(content[1]))
+	metaBytes := func(t *testing.T) []byte {
+		t.Helper()
+		d0 := sha256.Sum256(content[0])
+		d1 := sha256.Sum256(content[1])
+		fileHash := sha256.New()
+		fileHash.Write(content[0])
+		fileHash.Write(content[1])
+		m, err := BuildMetadata("a.bin", size, PieceSize, [][]byte{d0[:], d1[:]}, fileHash.Sum(nil))
+		if err != nil {
+			t.Fatalf("BuildMetadata: %v", err)
+		}
+		b, err := m.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}(t)
+
+	// Case A: crash after rename before commit (size matches) -> completed.
+	dirA := t.TempDir()
+	stA, err := NewFilePieceStore(dirA)
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	if err := stA.Put("a.bin", 0, content[0]); err != nil {
+		t.Fatalf("Put(0): %v", err)
+	}
+	if err := stA.Put("a.bin", 1, content[1]); err != nil {
+		t.Fatalf("Put(1): %v", err)
+	}
+	spA := stA.(*sparsePieceStore)
+	piecesA, _, finalA := sparseFilePaths(spA.dir, "a.bin")
+	_, metadataA, commitA := artifactPaths(spA.dir, "a.bin")
+	if err := os.Rename(piecesA, finalA); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if err := os.WriteFile(metadataA, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := stA.Close(); err != nil {
+		t.Fatalf("close stA: %v", err)
+	}
+
+	stA2, err := NewFilePieceStore(dirA)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = stA2.Close() })
+	if !stA2.IsComplete("a.bin") {
+		t.Fatal("interrupted seal not completed on reopen")
+	}
+	got0, err := stA2.Get("a.bin", 0)
+	got1, err2 := stA2.Get("a.bin", 1)
+	if err != nil || err2 != nil || !bytes.Equal(got0, content[0]) || !bytes.Equal(got1, content[1]) {
+		t.Fatalf("data lost in interrupted-seal recovery: (%q,%v) (%q,%v)", got0, err, got1, err2)
+	}
+	commitData, err := os.ReadFile(commitA)
+	if err != nil {
+		t.Fatalf("read recovered commit: %v", err)
+	}
+	commitID, err := DecodeCommit(commitData)
+	if err != nil || !bytes.Equal(commitID, MetadataID(metaBytes)) {
+		t.Fatalf("recovered commit metadata_id mismatch: %v", err)
+	}
+	// Re-Seal is idempotent + keeps the content.
+	if err := spA2Seal(stA2, size, metaBytes); err != nil {
+		t.Fatalf("re-Seal: %v", err)
+	}
+	if got0, _ := stA2.Get("a.bin", 0); !bytes.Equal(got0, content[0]) {
+		t.Fatal("data changed after re-Seal")
+	}
+
+	// Case B: crash with a size-mismatched final -> stale staging is cleaned;
+	// the re-download path starts fresh (no empty-file over stale-index trap).
+	dirB := t.TempDir()
+	stB, err := NewFilePieceStore(dirB)
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	if err := stB.Put("a.bin", 0, content[0]); err != nil {
+		t.Fatalf("Put(0): %v", err)
+	}
+	if err := stB.Put("a.bin", 1, content[1]); err != nil {
+		t.Fatalf("Put(1): %v", err)
+	}
+	spB := stB.(*sparsePieceStore)
+	piecesB, _, finalB := sparseFilePaths(spB.dir, "a.bin")
+	_, metadataB, _ := artifactPaths(spB.dir, "a.bin")
+	if err := os.Rename(piecesB, finalB); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if err := os.WriteFile(metadataB, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := os.Truncate(finalB, 1); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if err := stB.Close(); err != nil {
+		t.Fatalf("close stB: %v", err)
+	}
+
+	stB2, err := NewFilePieceStore(dirB)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = stB2.Close() })
+	if stB2.IsComplete("a.bin") {
+		t.Fatal("size-mismatch state reported complete")
+	}
+	for _, p := range []string{finalB, metadataB} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("stale artifact %s not cleaned (err=%v)", p, err)
+		}
+	}
+	spB2 := stB2.(*sparsePieceStore)
+	if spB2.HasPiece("a.bin", 0) {
+		t.Fatal("stale index trusted after size-mismatch recovery")
+	}
+	// A fresh re-download + Seal works and preserves the content.
+	if err := stB2.Put("a.bin", 0, content[0]); err != nil {
+		t.Fatalf("Put(0): %v", err)
+	}
+	if err := stB2.Put("a.bin", 1, content[1]); err != nil {
+		t.Fatalf("Put(1): %v", err)
+	}
+	sealTestFile(t, stB2, "a.bin", size)
+	if !stB2.IsComplete("a.bin") {
+		t.Fatal("re-download + Seal failed")
+	}
+}
+
+func spA2Seal(st PieceStore, size int64, metaBytes []byte) error {
+	return st.(*sparsePieceStore).Seal("a.bin", size, metaBytes)
+}

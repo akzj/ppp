@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc64"
 	"os"
 	"path/filepath"
@@ -124,22 +125,30 @@ func (s *sparsePieceStore) openLocked(filename string) (*sparseFile, error) {
 
 	if s.sealedOnDisk(filename) {
 		// Sealed artifact (data + metadata + commit all consistent): open
-		// read-only, every piece exists by construction.
-		file, err := os.Open(finalPath)
+		// read-only (openCompleteLocked also verifies the final's size).
+		cf, err := s.openCompleteLocked(f)
 		if err != nil {
 			return nil, err
 		}
-		stat, err := file.Stat()
+		s.open[filename] = cf
+		return cf, nil
+	}
+
+	// Interrupted-Seal recovery (§9 / C2.5): a crash between the rename and
+	// the commit-marker write must never fall through to the empty-pieces
+	// path with a stale index (that would serve holes as real pieces and let
+	// a later Seal destroy the real data). Complete the commit when the data
+	// matches, or clean the stale staging otherwise.
+	if err := s.recoverInterruptedSealLocked(filename, finalPath); err != nil {
+		return nil, err
+	}
+	if s.sealedOnDisk(filename) {
+		cf, err := s.openCompleteLocked(f)
 		if err != nil {
-			_ = file.Close()
 			return nil, err
 		}
-		f.file = file
-		f.complete = true
-		f.size = stat.Size()
-		f.accessTS = time.Now()
-		s.open[filename] = f
-		return f, nil
+		s.open[filename] = cf
+		return cf, nil
 	}
 
 	// In-progress file: sparse data file + bbolt index.
@@ -339,11 +348,21 @@ func (s *sparsePieceStore) Size(filename string) int64 {
 // served. Must hold s.mu.
 func (s *sparsePieceStore) sealedOnDisk(filename string) bool {
 	finalPath, metadataPath, commitPath := artifactPaths(s.dir, filename)
-	if _, err := os.Stat(finalPath); err != nil {
+	stat, err := os.Stat(finalPath)
+	if err != nil {
 		return false
 	}
 	meta, err := os.ReadFile(metadataPath)
 	if err != nil {
+		return false
+	}
+	m, err := DecodeMetadata(meta)
+	if err != nil {
+		return false
+	}
+	// P3 defense: the final's size must match the metadata's FileSize, so a
+	// truncated/corrupt data file is never reported sealed.
+	if stat.Size() != m.FileSize {
 		return false
 	}
 	commitData, err := os.ReadFile(commitPath)
@@ -357,7 +376,9 @@ func (s *sparsePieceStore) sealedOnDisk(filename string) bool {
 	return bytes.Equal(commitID, MetadataID(meta))
 }
 
-// IsComplete reports whether the file was atomically published (Seal).
+// IsComplete reports whether the file was atomically published (Seal). It also
+// triggers the interrupted-seal recovery, so a crash between the rename and
+// the commit-marker write is completed (or cleaned) before the sealed check.
 func (s *sparsePieceStore) IsComplete(filename string) bool {
 	if !validBasename(filename) {
 		return false
@@ -366,6 +387,10 @@ func (s *sparsePieceStore) IsComplete(filename string) bool {
 	defer s.mu.Unlock()
 	if f, ok := s.open[filename]; ok {
 		return f.complete
+	}
+	_, _, finalPath := sparseFilePaths(s.dir, filename)
+	if err := s.recoverInterruptedSealLocked(filename, finalPath); err != nil {
+		return false
 	}
 	return s.sealedOnDisk(filename)
 }
@@ -447,6 +472,14 @@ func (s *sparsePieceStore) openCompleteLocked(f *sparseFile) (*sparseFile, error
 		file.Close()
 		return nil, err
 	}
+	// P3 defense: the final's size must match the sealed metadata's FileSize;
+	// a truncated/corrupt data file is never served.
+	if meta, ok, err := s.ReadMetadata(f.filename); err == nil && ok {
+		if m, derr := DecodeMetadata(meta); derr == nil && m.FileSize != stat.Size() {
+			file.Close()
+			return nil, fmt.Errorf("agent: sealed artifact size mismatch: final %d, metadata %d", stat.Size(), m.FileSize)
+		}
+	}
 	return &sparseFile{
 		filename:   f.filename,
 		piecesPath: f.piecesPath,
@@ -457,6 +490,65 @@ func (s *sparsePieceStore) openCompleteLocked(f *sparseFile) (*sparseFile, error
 		complete:   true,
 		accessTS:   time.Now(),
 	}, nil
+}
+
+// recoverInterruptedSealLocked recognizes a crash between the rename and the
+// commit-marker write (<basename> + .cds.metadata present, .cds.commit
+// missing) and either completes the seal or cleans the stale staging:
+//   - the final's size equals the metadata's FileSize -> the data is intact
+//     and authoritative; the commit marker is written to finish the publish
+//     (no re-download, no data loss);
+//   - otherwise -> the staged data is suspect; the stale index, metadata and
+//     final are removed so the normal in-progress/re-download path starts
+//     clean.
+//
+// This NEVER falls through to "rebuild an empty .cds.pieces over a stale
+// index": that would serve empty holes as real pieces (HasPiece false-positives)
+// and let a later Seal rename the empty file over the real data. Must hold s.mu.
+func (s *sparsePieceStore) recoverInterruptedSealLocked(filename, finalPath string) error {
+	finalStat, err := os.Stat(finalPath)
+	if err != nil {
+		return nil // no final: nothing to recover
+	}
+	_, metadataPath, commitPath := artifactPaths(s.dir, filename)
+	meta, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return nil // no metadata: not an interrupted seal
+	}
+	if _, err := os.Stat(commitPath); err == nil {
+		return nil // commit present: sealedOnDisk handles it
+	}
+	m, err := DecodeMetadata(meta)
+	if err != nil {
+		// Unreadable metadata: cannot complete; drop the stale staging.
+		s.clearStaleStagingLocked(filename, finalPath)
+		return nil
+	}
+	if finalStat.Size() != m.FileSize {
+		// Data does not match the metadata: stale/corrupt staging.
+		s.clearStaleStagingLocked(filename, finalPath)
+		return nil
+	}
+	// Data matches the metadata: complete the seal by writing the commit.
+	commitData, err := EncodeCommit(MetadataID(meta))
+	if err != nil {
+		return err
+	}
+	if err := writeFileSync(commitPath, commitData); err != nil {
+		return err
+	}
+	return fsyncDir(s.dir)
+}
+
+// clearStaleStagingLocked removes the stale index, metadata and final of an
+// interrupted seal whose data does not match, so the in-progress path starts
+// clean. Must hold s.mu.
+func (s *sparsePieceStore) clearStaleStagingLocked(filename, finalPath string) {
+	_, indexPath, _ := sparseFilePaths(s.dir, filename)
+	_, metadataPath, _ := artifactPaths(s.dir, filename)
+	_ = os.Remove(indexPath)
+	_ = os.Remove(metadataPath)
+	_ = os.Remove(finalPath)
 }
 
 // ============ metadata sidecar ============
