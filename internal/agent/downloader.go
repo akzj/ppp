@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -558,7 +559,9 @@ func (d *Downloader) bindMetadata() error {
 		d.size = size
 		d.numPieces = (size + PieceSize - 1) / PieceSize
 		d.pieceHashes = make([][]byte, d.numPieces)
+		boundID := append([]byte(nil), d.metaID...)
 		d.mu.Unlock()
+		log.Printf("agent %s: bound metadata for %s/%s metadata_id=%x", d.nodeID, d.treeID, d.filename, boundID[:min(len(boundID), 8)])
 		return nil
 	}
 	// No upstream has a sealed artifact. A root (the failover case) then
@@ -622,6 +625,7 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 			// Banned consistency (C5): the server sends PermissionDenied for a
 			// banned file (the MetadataChunk message has no error field).
 			if status.Code(err) == codes.PermissionDenied {
+				log.Printf("agent %s: metadata banned %s/%s (GetMetadata PermissionDenied)", d.nodeID, d.treeID, d.filename)
 				return nil, nil, 0, errFileBanned
 			}
 			return nil, nil, 0, err
@@ -684,6 +688,7 @@ func (d *Downloader) verifyPieceDigest(index int64, data []byte) error {
 	}
 	got := sha256.Sum256(data)
 	if !bytes.Equal(got[:], want) {
+		log.Printf("agent %s: piece digest mismatch %s/%s piece=%d metadata_id=%x", d.nodeID, d.treeID, d.filename, index, d.metaID[:min(len(d.metaID), 8)])
 		return fmt.Errorf("%w: piece %d", errPieceDigestMismatch, index)
 	}
 	return nil
@@ -763,10 +768,15 @@ func (d *Downloader) sealAndPublishLocked() error {
 func (d *Downloader) sealChecked(metaBytes []byte) error {
 	if existing, ok, _ := d.store.ReadMetadata(d.filename); ok {
 		if !bytes.Equal(MetadataID(existing), MetadataID(metaBytes)) {
+			log.Printf("agent %s: content conflict %s/%s existing=%x new=%x", d.nodeID, d.treeID, d.filename, MetadataID(existing)[:8], MetadataID(metaBytes)[:8])
 			return fmt.Errorf("%w: existing sealed artifact has a different metadata_id", errContentConflict)
 		}
 	}
-	return d.store.Seal(d.filename, d.size, metaBytes)
+	if err := d.store.Seal(d.filename, d.size, metaBytes); err != nil {
+		return err
+	}
+	log.Printf("agent %s: sealed %s/%s metadata_id=%x", d.nodeID, d.treeID, d.filename, MetadataID(metaBytes)[:8])
+	return nil
 }
 
 // fetchPiece fetches one piece with retries, stores it and notifies waiters.
