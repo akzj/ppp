@@ -107,6 +107,12 @@ func (f *fakeDataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceReques
 		case <-ctx.Done():
 		}
 	}
+	// Honor cancellation like a real server: never serve after the client has
+	// gone (a hung-peer test relies on the caller timing out, not on the fake
+	// returning a late piece that could race the client's deadline).
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if fail {
 		return &pppv1.GetPieceResponse{Result: &pppv1.GetPieceResponse_Error{
 			Error: &pppv1.Error{Code: pppv1.Error_INTERNAL, Message: "transient"},

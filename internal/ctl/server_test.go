@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,14 +20,26 @@ import (
 // parallel.
 var testNow = time.Unix(1_000_000, 0)
 
-// newTestServer builds a server over a temp bbolt store with a fixed clock.
+// truncatePG clears the shared test tables (used by ServeControl-based tests
+// which open PG directly). Skips when PostgreSQL is unreachable.
+func truncatePG(t *testing.T) {
+	t.Helper()
+	st, err := OpenPGStore(context.Background(), testPGDSN)
+	if err != nil {
+		t.Skipf("PostgreSQL not reachable at %s (%v); skipping", testPGDSN, err)
+	}
+	defer st.Close()
+	if _, err := st.Pool().Exec(context.Background(),
+		`TRUNCATE trees, nodes, jobs, banned, progress, meta, ctl_leader RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+}
+
+// newTestServer builds a server over a clean PG-backed store with a fixed
+// clock (skips when PostgreSQL is unreachable).
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	st, err := OpenStore(filepath.Join(t.TempDir(), "ctl.db"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := newTestStore(t)
 	srv := NewServer(st, DefaultConfig())
 	srv.now = func() time.Time { return testNow }
 	return srv
@@ -387,8 +398,9 @@ func TestUUIDFormat(t *testing.T) {
 // connected client plus a cleanup func.
 func startTestGRPC(t *testing.T) (pppv1.ControlClient, func()) {
 	t.Helper()
+	truncatePG(t)
 	cfg := DefaultConfig()
-	cfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	cfg.PGDSN = testPGDSN
 	ctx, cancel := context.WithCancel(context.Background())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -766,14 +778,18 @@ func TestFanoutSubscriberCleanup(t *testing.T) {
 // TestStoreRestartPersistence verifies trees, nodes, jobs, banned records and
 // generations survive a store close/reopen, including a cancellation.
 func TestStoreRestartPersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ctl.db")
+	truncatePG(t)
 	cfg := DefaultConfig()
-	cfg.DBPath = path
+	cfg.PGDSN = testPGDSN
 
-	st, err := OpenStore(path)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
+	open := func() Store {
+		st, err := OpenPGStore(context.Background(), testPGDSN)
+		if err != nil {
+			t.Fatalf("OpenPGStore: %v", err)
+		}
+		return st
 	}
+	st := open()
 	srv := NewServer(st, cfg)
 	srv.now = func() time.Time { return testNow }
 	createTree(t, srv, "t1", 3)
@@ -789,10 +805,7 @@ func TestStoreRestartPersistence(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	st2, err := OpenStore(path)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
+	st2 := open()
 	defer st2.Close()
 
 	if _, err := st2.GetTree("t1"); err != nil {
@@ -949,9 +962,10 @@ func TestRegisterNodeResponseBanned(t *testing.T) {
 // context with an active watch stream open must not hang shutdown. GracefulStop
 // is bounded and falls back to a forced Stop, then the store is closed.
 func TestGRPCShutdownWithActiveWatch(t *testing.T) {
+	truncatePG(t)
 
 	cfg := DefaultConfig()
-	cfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	cfg.PGDSN = testPGDSN
 	ctx, cancel := context.WithCancel(context.Background())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

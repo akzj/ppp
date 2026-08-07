@@ -1,20 +1,71 @@
 package ctl
 
 import (
+	"context"
 	"errors"
-	"path/filepath"
+	"sync"
 	"testing"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func newTestStore(t *testing.T) *bboltStore {
+// testPGDSN is the PostgreSQL DSN used by the ctl tests (Docker PG, see
+// docs/deployment.md). Tests skip when the database is unreachable so the
+// suite is not red on machines without PG.
+const testPGDSN = "postgres://ppp:ppp@127.0.0.1:25433/ppp_test"
+
+// openTestPool opens a raw pgx pool on the test database (skips when
+// unreachable); used by leader-election and failover tests.
+func openTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	st, err := OpenStore(filepath.Join(t.TempDir(), "ctl.db"))
+	pool, err := pgxpool.New(context.Background(), testPGDSN)
 	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
+		t.Skipf("PostgreSQL not reachable at %s (%v); skipping", testPGDSN, err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// TestPGStoreGenerationAtomic verifies concurrent generation bumps never lose
+// increments (the atomic INSERT ... ON CONFLICT DO UPDATE ... RETURNING).
+func TestPGStoreGenerationAtomic(t *testing.T) {
+	st := newTestStore(t)
+	const n = 8
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := st.BumpTopologyGeneration("t1"); err != nil {
+				t.Errorf("bump: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	gen, err := st.TopologyGeneration("t1")
+	if err != nil {
+		t.Fatalf("generation: %v", err)
+	}
+	if gen != n {
+		t.Fatalf("generation = %d, want %d (no lost increments)", gen, n)
+	}
+}
+
+// newTestStore opens a clean PG-backed store, truncating the shared tables so
+// every test starts isolated. It skips the test when PostgreSQL is
+// unreachable.
+func newTestStore(t *testing.T) Store {
+	t.Helper()
+	st, err := OpenPGStore(context.Background(), testPGDSN)
+	if err != nil {
+		t.Skipf("PostgreSQL not reachable at %s (%v); skipping (see docs/deployment.md)", testPGDSN, err)
 	}
 	t.Cleanup(func() { st.Close() })
+	if _, err := st.Pool().Exec(context.Background(),
+		`TRUNCATE trees, nodes, jobs, banned, progress, meta, ctl_leader RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
 	return st
 }
 
@@ -344,13 +395,21 @@ func TestStoreProgressUpsert(t *testing.T) {
 }
 
 // TestStoreProgressPersistsAcrossRestart verifies progress is durable in
-// bbolt: records survive a close/reopen.
+// PostgreSQL: records survive a close/reopen (a new store on the same DB,
+// without the per-test truncation).
 func TestStoreProgressPersistsAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ctl.db")
-	st, err := OpenStore(path)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
+	// Start from a clean schema so records from other tests do not leak in;
+	// the second open must NOT truncate (the data must survive).
+	truncatePG(t)
+	open := func() Store {
+		st, err := OpenPGStore(context.Background(), testPGDSN)
+		if err != nil {
+			t.Skipf("PostgreSQL not reachable (%v); skipping", err)
+		}
+		t.Cleanup(func() { st.Close() })
+		return st
 	}
+	st := open()
 	if err := st.UpsertProgress(&pppv1.ProgressState{TreeId: "t1", JobId: "job:1", Filename: "a.bin", Progress: 55}, "n1"); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
@@ -358,11 +417,7 @@ func TestStoreProgressPersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	st2, err := OpenStore(path)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer st2.Close()
+	st2 := open()
 	all, err := st2.ListProgress("t1")
 	if err != nil {
 		t.Fatalf("ListProgress after restart: %v", err)

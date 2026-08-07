@@ -17,8 +17,9 @@ import (
 // cleanup func and the listener (for the agent's -ctl-addr).
 func startCtlGRPC(t *testing.T) (pppv1.ControlClient, func(), net.Listener) {
 	t.Helper()
+	truncateCtlPG(t)
 	cfg := ctl.DefaultConfig()
-	cfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	cfg.PGDSN = ctlTestPGDSN
 	ctx, cancel := context.WithCancel(context.Background())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

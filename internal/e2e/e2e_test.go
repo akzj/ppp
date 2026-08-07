@@ -19,9 +19,35 @@ import (
 	"time"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
+	"github.com/akzj/ppp/internal/ctl"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// e2ePGDSN is the PostgreSQL DSN for the e2e ctl (Docker PG; see
+// docs/deployment.md). The tests skip when it is unreachable so the suite is
+// not red on machines without PG.
+const e2ePGDSN = "postgres://ppp:ppp@127.0.0.1:25433/ppp_test_e2e"
+
+// truncateE2EPG clears the shared ctl tables before each scenario (the two
+// e2e scenarios share one test database).
+func truncateE2EPG(t *testing.T) {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), e2ePGDSN)
+	if err != nil {
+		t.Skipf("PostgreSQL not reachable at %s (%v); skipping", e2ePGDSN, err)
+	}
+	defer pool.Close()
+	// The e2e database may be brand-new; ensure the schema before truncating.
+	if err := ctl.MigrateSchema(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`TRUNCATE trees, nodes, jobs, banned, progress, meta, ctl_leader RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+}
 
 // pieceSize must match the agent's PieceSize (4 MiB) so the real binaries
 // slice/verify pieces identically.
@@ -304,6 +330,7 @@ func startService(t *testing.T, logDir, id, addr, ctlAddr, role, downloadPath st
 // TestE2ESingleRootDistribution exercises the full happy path plus
 // cancel/ban/unban and the restart-window local ban persistence.
 func TestE2ESingleRootDistribution(t *testing.T) {
+	truncateE2EPG(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -322,8 +349,7 @@ func TestE2ESingleRootDistribution(t *testing.T) {
 	// --- ctl ---
 	ctlPort := freePort(t)
 	ctlAddr := fmt.Sprintf("127.0.0.1:%d", ctlPort)
-	ctlDB := filepath.Join(t.TempDir(), "ctl.db")
-	startProc(t, logDir, "ctl", ctlBin, "-addr", ctlAddr, "-db", ctlDB)
+	startProc(t, logDir, "ctl", ctlBin, "-addr", ctlAddr, "-pg-dsn", e2ePGDSN)
 	waitPort(t, ctlAddr, 10*time.Second)
 	ctl := newControlClient(t, ctlAddr)
 
@@ -408,6 +434,7 @@ func TestE2ESingleRootDistribution(t *testing.T) {
 // non-primary root fetches from the primary, and after the primary is killed
 // the surviving root still serves a member.
 func TestE2EMultiRootFaultTolerance(t *testing.T) {
+	truncateE2EPG(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -424,7 +451,7 @@ func TestE2EMultiRootFaultTolerance(t *testing.T) {
 
 	ctlPort := freePort(t)
 	ctlAddr := fmt.Sprintf("127.0.0.1:%d", ctlPort)
-	startProc(t, logDir, "ctl", ctlBin, "-addr", ctlAddr, "-db", filepath.Join(t.TempDir(), "ctl.db"))
+	startProc(t, logDir, "ctl", ctlBin, "-addr", ctlAddr, "-pg-dsn", e2ePGDSN)
 	waitPort(t, ctlAddr, 10*time.Second)
 	ctl := newControlClient(t, ctlAddr)
 

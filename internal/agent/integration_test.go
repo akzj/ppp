@@ -12,9 +12,33 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"github.com/akzj/ppp/internal/ctl"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// ctlTestPGDSN is the PostgreSQL DSN for the in-process ctl used by the agent
+// integration tests (Docker PG; tests skip when unreachable).
+const ctlTestPGDSN = "postgres://ppp:ppp@127.0.0.1:25433/ppp_test_agent"
+
+// truncateCtlPG clears the shared ctl test tables so the in-process ctl starts
+// clean (skips when PostgreSQL is unreachable).
+func truncateCtlPG(t *testing.T) {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), ctlTestPGDSN)
+	if err != nil {
+		t.Skipf("PostgreSQL not reachable at %s (%v); skipping", ctlTestPGDSN, err)
+	}
+	defer pool.Close()
+	// The agent test database may be brand-new; ensure the schema first.
+	if err := ctl.MigrateSchema(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`TRUNCATE trees, nodes, jobs, banned, progress, meta, ctl_leader RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+}
 
 // waitFor polls cond until it returns true or the timeout elapses.
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
@@ -47,8 +71,9 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	// --- in-process ctl ---
 	ctlCtx, ctlCancel := context.WithCancel(context.Background())
 	defer ctlCancel()
+	truncateCtlPG(t)
 	ctlCfg := ctl.DefaultConfig()
-	ctlCfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	ctlCfg.PGDSN = ctlTestPGDSN
 	ctlLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ctl listen: %v", err)
@@ -237,8 +262,9 @@ func TestIntegrationDataServerSubscribeLease(t *testing.T) {
 
 	ctlCtx, ctlCancel := context.WithCancel(context.Background())
 	defer ctlCancel()
+	truncateCtlPG(t)
 	ctlCfg := ctl.DefaultConfig()
-	ctlCfg.DBPath = filepath.Join(t.TempDir(), "ctl.db")
+	ctlCfg.PGDSN = ctlTestPGDSN
 	ctlLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ctl listen: %v", err)
