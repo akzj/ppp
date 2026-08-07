@@ -8,7 +8,7 @@ For the design, see [design-v2.md](design-v2.md); for a quick start, see the
 
 | Binary | Purpose |
 |--------|---------|
-| `cmd/ppp-ctl-server` | Control plane: gRPC Control service, durable bbolt state, topology / jobs / banned-list fan-out. Single instance. |
+| `cmd/ppp-ctl-server` | Control plane: gRPC Control service, durable PostgreSQL state, topology / jobs / banned-list fan-out. Multiple instances share one PG; a PG lease elects exactly one leader (no raft). |
 | `cmd/ppp-service` | Edge data node: registers with the ctl, serves the Data gRPC service, downloads files from the source or upstream peers into a local piece store. |
 
 ## `ppp-ctl-server` flags
@@ -16,7 +16,11 @@ For the design, see [design-v2.md](design-v2.md); for a quick start, see the
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-addr` | `:9090` | gRPC listen address. Use `127.0.0.1:PORT` or `:PORT`. |
-| `-db` | `ppp-ctl.db` | bbolt database file path (durable state: trees, nodes, jobs, banned list, progress). |
+| `-http-addr` | `:9091` | `/leader` health-check listen address (200 leader / 503 follower). |
+| `-pg-dsn` | `postgres://ppp:ppp@127.0.0.1:25433/ppp` | PostgreSQL DSN (the ctl's primary store). |
+| `-instance-id` | `ctl-1` | Control-plane instance id (used in leader election). |
+| `-leader-lease` | `10s` | Leader lease duration; after expiry another instance may take over. |
+| `-leader-renew` | `2s` | Leader lease renewal interval. |
 | `-heartbeat-timeout` | `30s` | How long a node may stay silent before it is pruned and its topology entry removed. |
 | `-group-members` | `16` | Default members per group for trees created without explicit `GroupMembers`. |
 | `-group-children` | `8` | Default child groups per group for trees created without explicit `GroupChildren`. |
@@ -37,6 +41,58 @@ For the design, see [design-v2.md](design-v2.md); for a quick start, see the
 | `-lease-ttl` | `30s` | Session-lease duration for downstream `Subscribe` calls. |
 
 Both binaries accept `-h` for the full flag list.
+
+## Control plane storage & leader election (PostgreSQL)
+
+The ctl's primary store is PostgreSQL (phase 7); the previous bbolt backend was
+removed. Proto records are stored as JSONB. Tables are created automatically at
+startup (`CREATE TABLE IF NOT EXISTS`):
+
+```
+trees(tree_id text PK, data jsonb)
+nodes(tree_id text, node_id text, data jsonb, PK(tree_id, node_id))
+jobs(job_id text PK, tree_id text, data jsonb)
+banned(tree_id text, filename text, data jsonb, PK(tree_id, filename))
+progress(tree_id, job_id, filename, node_id, data jsonb, PK(tree_id, job_id, filename, node_id))
+meta(tree_id text, key text, value bigint, PK(tree_id, key))   -- topology_gen / banned_gen
+ctl_leader(singleton_id int PK CHECK (singleton_id=1), instance_id text, lease_until timestamptz)
+```
+
+Generation counters are incremented atomically
+(`INSERT ... ON CONFLICT DO UPDATE SET value = meta.value + 1 RETURNING value`),
+safe across concurrent instances sharing one PG.
+
+**Leader election (PG lease, no raft):** each instance renews the singleton
+`ctl_leader` row:
+`UPDATE ctl_leader SET instance_id=$1, lease_until=now()+lease WHERE singleton_id=1 AND (instance_id=$1 OR lease_until < now()) RETURNING instance_id`.
+The instance whose UPDATE returns a row is the leader; the first row is
+bootstrapped with `INSERT ... ON CONFLICT DO NOTHING`. The leader renews every
+`-leader-renew`; on exit/crash the lease expires within `-leader-lease` and
+another instance takes over.
+
+**Leader duties** (follower mutations/watch calls return `Unavailable` — an LB
+should route only to the leader): mutation RPCs, the watch streams (topology /
+banned / jobs fan-out), heartbeat liveness pruning, and topology computation +
+generation bumps. Read-only single-shot queries (GetTree/ListTrees/
+ListBanned/QueryJob/ListJobs/SyncProgress) may be served by any instance. Expose
+the `/leader` HTTP endpoint (via `-http-addr`) to the LB/VIP so it routes to the
+current leader (200) and away from followers (503).
+
+**Docker PG development** (the test suite and the e2e use it):
+
+```sh
+docker run -d --name ppp-pg -p 127.0.0.1:25433:5432 -e POSTGRES_USER=ppp -e POSTGRES_PASSWORD=ppp -e POSTGRES_DB=ppp postgres:16
+psql -h 127.0.0.1 -p 25433 -U ppp -d ppp <<'SQL'
+CREATE DATABASE ppp_test;        -- ctl unit + server tests
+CREATE DATABASE ppp_test_agent;  -- agent integration tests (in-process ctl)
+CREATE DATABASE ppp_test_e2e;    -- real multi-process e2e
+SQL
+```
+
+Each test package uses its **own** database (they run in parallel under
+`go test ./...`), truncates its tables before each test, and **skips** when
+PostgreSQL is unreachable (see the test comments), so the suite is not red on
+machines without PG.
 
 ## Topology parameters
 
