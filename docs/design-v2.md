@@ -164,6 +164,19 @@ ppp-service 为下游提供 piece；**本地没有数据时向上回源，支持
 
 任一 need 存在则 downloader 存活；cancelJob 到达时**清空该 JobID 的全部 need → 下载器停止**（含 child need 触发的子任务，这正是"取消的任务持续存在"的修复）；仅某个子节点取消时只摘除对应 child need，不影响 local need 与其它子节点。
 
+## 3.6 文件分发核心流程（不可变 metadata）
+
+文件分发的一致性、metadata 生成与逐层复制以
+[`docs/file-distribution-core.md`](file-distribution-core.md) 为准。核心边界如下：
+
+- ctl 只维护 Tree、Node、Topology、Job 编排和 banned list，不保存文件或 piece metadata；
+- filename 是业务文件身份，同一 Tree 内不能对应不同内容；
+- primary root 首次回源时一边下载，一边生成唯一的不可变 metadata；
+- 后续 root、member 和扩容节点只从 upstream 原样复制 sealed metadata 和 data；
+- 节点以 metadata 中的预期 digest 校验 piece，以 metadata_id 检测同 filename 内容冲突；
+- data、metadata 和 commit marker 原子发布后，artifact 才可向下一层提供；
+- 扩容节点从 ctl 只获得 upstreams，待下载 filename 来自本机业务期望状态或部署系统，内容协商完全走数据面。
+
 ## 4. 数据节点（ppp-service）重设计
 
 ### 4.1 状态与存储

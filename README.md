@@ -99,6 +99,8 @@ internal/e2e/         real-multi-process end-to-end tests
 pkg/topology/         deterministic tree-topology builder (ported idea from tengen)
 proto/ + gen/         protobuf definitions and generated Go code
 docs/design-v2.md     design document (v2)
+docs/file-distribution-core.md
+                      core artifact/immutable-metadata distribution flow
 docs/deployment.md    deployment reference
 ```
 
