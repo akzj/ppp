@@ -25,6 +25,15 @@ type Config struct {
 	LeaderLease time.Duration
 	// LeaderRenew is how often the leader renews its lease.
 	LeaderRenew time.Duration
+	// TLS options for mTLS (all empty = plaintext, development compatibility).
+	TLSCA   string
+	TLSCert string
+	TLSKey  string
+	// TLSClientCert/TLSClientKey/TLSClientCA are the client-side identity the
+	// ctl uses when it dials peers (unused for now; the ctl only serves).
+	TLSClientCA   string
+	TLSClientCert string
+	TLSClientKey  string
 	// HeartbeatTimeout is how long a node may stay silent before it is pruned
 	// and its topology entry removed.
 	HeartbeatTimeout time.Duration
@@ -57,6 +66,9 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.InstanceID, "instance-id", c.InstanceID, "control-plane instance id (leader election)")
 	fs.DurationVar(&c.LeaderLease, "leader-lease", c.LeaderLease, "leader lease duration")
 	fs.DurationVar(&c.LeaderRenew, "leader-renew", c.LeaderRenew, "leader lease renewal interval")
+	fs.StringVar(&c.TLSCA, "tls-ca", c.TLSCA, "CA cert file for mTLS (empty = plaintext)")
+	fs.StringVar(&c.TLSCert, "tls-cert", c.TLSCert, "server cert file for mTLS")
+	fs.StringVar(&c.TLSKey, "tls-key", c.TLSKey, "server key file for mTLS")
 	fs.DurationVar(&c.HeartbeatTimeout, "heartbeat-timeout", c.HeartbeatTimeout, "node heartbeat timeout before pruning")
 	fs.IntVar(&c.DefaultGroupMembers, "group-members", c.DefaultGroupMembers, "default members per group for new trees")
 	fs.IntVar(&c.DefaultGroupChildren, "group-children", c.DefaultGroupChildren, "default child groups per group for new trees")

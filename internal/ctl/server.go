@@ -16,6 +16,7 @@ import (
 	"time"
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
+	"github.com/akzj/ppp/internal/tlsutil"
 	"github.com/akzj/ppp/pkg/topology"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -144,7 +145,19 @@ func ServeControl(ctx context.Context, cfg *Config, lis net.Listener) (gs *grpc.
 		st.Close()
 		return nil, nil, err
 	}
-	gs = grpc.NewServer()
+	// mTLS when configured (all TLS flags empty = plaintext). The /leader HTTP
+	// health endpoint stays plaintext (it only returns 200/503 for an LB/VIP).
+	var serverOpts []grpc.ServerOption
+	creds, err := tlsutil.LoadServerCredentials(cfg.TLSCA, cfg.TLSCert, cfg.TLSKey)
+	if err != nil {
+		leader.Stop()
+		st.Close()
+		return nil, nil, err
+	}
+	if creds != nil {
+		serverOpts = append(serverOpts, grpc.Creds(creds))
+	}
+	gs = grpc.NewServer(serverOpts...)
 	pppv1.RegisterControlServer(gs, srv)
 	doneCh := make(chan struct{})
 	go func() {
