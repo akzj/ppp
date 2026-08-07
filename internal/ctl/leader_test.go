@@ -2,6 +2,10 @@ package ctl
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -85,4 +89,44 @@ func TestLeaderElectorLeaseExpiryTakeover(t *testing.T) {
 	if a.IsLeader() {
 		t.Fatal("old leader still reported leader after stopping")
 	}
+}
+
+// TestLeaderHTTPEndpoint verifies the /leader health endpoint with real HTTP
+// requests: leader -> 200, follower -> 503.
+func TestLeaderHTTPEndpoint(t *testing.T) {
+	free := func() string {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		addr := lis.Addr().String()
+		_ = lis.Close()
+		return addr
+	}
+	leaderAddr := free()
+	followerAddr := free()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveLeaderHTTP(ctx, leaderAddr, func() bool { return true })
+	go serveLeaderHTTP(ctx, followerAddr, func() bool { return false })
+
+	check := func(addr string, want int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			resp, err := http.Get(fmt.Sprintf("http://%s/leader", addr))
+			if err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				if resp.StatusCode == want {
+					return
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("GET /leader on %s = not %d within 5s", addr, want)
+	}
+	check(leaderAddr, http.StatusOK)
+	check(followerAddr, http.StatusServiceUnavailable)
 }

@@ -27,6 +27,85 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// TestPGStoreAddBannedConcurrent is the P1 regression lock: N concurrent
+// AddBanned on the same (tree, file) must yield exactly one insert + N-1
+// already=true, zero errors, and a consistent generation (no TOCTOU unique
+// violations).
+func TestPGStoreAddBannedConcurrent(t *testing.T) {
+	st := newTestStore(t)
+	const n = 8
+	errs := make([]error, n)
+	insertedFlags := make([]bool, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, already, err := st.AddBanned(&pppv1.BannedFile{TreeId: "t1", Filename: "a.bin"})
+			errs[i] = err
+			insertedFlags[i] = !already
+		}(i)
+	}
+	wg.Wait()
+	inserted := 0
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("AddBanned(%d): %v", i, errs[i])
+		}
+		if insertedFlags[i] {
+			inserted++
+		}
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted = %d, want exactly 1", inserted)
+	}
+	gen, err := st.BannedGeneration("t1")
+	if err != nil {
+		t.Fatalf("generation: %v", err)
+	}
+	if gen != 1 {
+		t.Fatalf("banned generation = %d, want 1 (one insert, one bump)", gen)
+	}
+}
+
+// TestPGStoreRemoveBannedConcurrent verifies RemoveBanned is idempotent under
+// concurrency: exactly one caller reports a removal, the rest no-ops, and no
+// caller errors.
+func TestPGStoreRemoveBannedConcurrent(t *testing.T) {
+	st := newTestStore(t)
+	if _, _, err := st.AddBanned(&pppv1.BannedFile{TreeId: "t1", Filename: "a.bin"}); err != nil {
+		t.Fatalf("AddBanned: %v", err)
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	removed := 0
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, r, err := st.RemoveBanned("t1", "a.bin")
+			if err != nil {
+				t.Errorf("RemoveBanned: %v", err)
+				return
+			}
+			if r {
+				mu.Lock()
+				removed++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if removed != 1 {
+		t.Fatalf("removed = %d, want exactly 1", removed)
+	}
+	// Idempotent after the fact: an absent row is not an error.
+	if _, r, err := st.RemoveBanned("t1", "a.bin"); err != nil || r {
+		t.Fatalf("idempotent remove = (%v, %v), want (nil, false)", err, r)
+	}
+}
+
 // TestPGStoreGenerationAtomic verifies concurrent generation bumps never lose
 // increments (the atomic INSERT ... ON CONFLICT DO UPDATE ... RETURNING).
 func TestPGStoreGenerationAtomic(t *testing.T) {
