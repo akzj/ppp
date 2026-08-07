@@ -902,6 +902,7 @@ type ProgressState struct {
 	Progress        int32                       `protobuf:"varint,6,opt,name=progress,proto3" json:"progress,omitempty"` // 0-100
 	State           ProgressState_DownloadState `protobuf:"varint,7,opt,name=state,proto3,enum=ppp.v1.ProgressState_DownloadState" json:"state,omitempty"`
 	Error           string                      `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	LocalPath       string                      `protobuf:"bytes,9,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"` // final on-disk path on the reporting node
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -988,6 +989,13 @@ func (x *ProgressState) GetState() ProgressState_DownloadState {
 func (x *ProgressState) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *ProgressState) GetLocalPath() string {
+	if x != nil {
+		return x.LocalPath
 	}
 	return ""
 }
@@ -1082,7 +1090,7 @@ const file_ppp_v1_common_proto_rawDesc = "" +
 	"\x06offset\x18\x04 \x01(\x03R\x06offset\"B\n" +
 	"\x05Piece\x12%\n" +
 	"\x04info\x18\x01 \x01(\v2\x11.ppp.v1.PieceInfoR\x04info\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\xee\x02\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\x8d\x03\n" +
 	"\rProgressState\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atree_id\x18\x02 \x01(\tR\x06treeId\x12\x1a\n" +
@@ -1091,7 +1099,9 @@ const file_ppp_v1_common_proto_rawDesc = "" +
 	"\x10downloaded_bytes\x18\x05 \x01(\x03R\x0fdownloadedBytes\x12\x1a\n" +
 	"\bprogress\x18\x06 \x01(\x05R\bprogress\x129\n" +
 	"\x05state\x18\a \x01(\x0e2#.ppp.v1.ProgressState.DownloadStateR\x05state\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error\"e\n" +
+	"\x05error\x18\b \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"local_path\x18\t \x01(\tR\tlocalPath\"e\n" +
 	"\rDownloadState\x12\x1e\n" +
 	"\x1aDOWNLOAD_STATE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vDOWNLOADING\x10\x01\x12\v\n" +

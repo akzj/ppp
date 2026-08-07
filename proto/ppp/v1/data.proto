@@ -26,6 +26,17 @@ service Data {
   // subscriber leaves.
   rpc Subscribe(SubscribeRequest) returns (SubscribeResponse);
   rpc Unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse);
+
+  // Resolve the final on-disk path of a file on this node.
+  rpc ResolvePath(ResolvePathRequest) returns (ResolvePathResponse);
+}
+
+message ResolvePathRequest {
+  TreeKey key = 1;
+}
+message ResolvePathResponse {
+  string local_path = 1; // <download-path>/<basename>
+  bool exist = 2;        // whether the file is currently present (complete)
 }
 
 message GetPieceRequest {

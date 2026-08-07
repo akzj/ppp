@@ -125,4 +125,5 @@ message ProgressState {
   int32 progress = 6;   // 0-100
   DownloadState state = 7;
   string error = 8;
+  string local_path = 9; // final on-disk path on the reporting node
 }
