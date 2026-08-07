@@ -219,7 +219,7 @@ rpc GetFile / DownloadFile(DownloadFileRequest) -> stream ProgressState
 // 取消不靠逐跳 RPC：由 banned list 驱动（见 §3.2）
 // 命中 banned 的 GetPiece/DownloadFile 返回 ErrBannedDistribution
 ```
-- `from[]hop` 防环（沿用 From 思想，携带 nodeID + jobID，供每跳注册订阅）。
+- `from[]hop` 防环（沿用 From 思想，携带 nodeID + jobID）：**仅用于环检测**——任一节点若发现自己的 nodeID 已在请求的 from 链中，直接拒绝（LOOP_DETECTED）。订阅/退订不经过 from 链，走显式 `Subscribe`/`Unsubscribe` 会话租约（见 §3.3）。
 - piece 传输：unary 每 4MB piece；可后续优化为 streaming。
 
 ## 7. 与现有代码的关系

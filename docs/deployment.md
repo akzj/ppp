@@ -35,7 +35,6 @@ For the design, see [design-v2.md](design-v2.md); for a quick start, see the
 | `-tree` | (required) | Tree id this node belongs to, e.g. `app/env/idc`. |
 | `-role` | `member` | `root` or `member`. **Required for the topology**: a root registers with role ROOT; members are leaves/middle layers. |
 | `-download-path` | `./ppp-data` | Directory for the local piece store. |
-| `-store` | `mmap` | Deprecated: `file` and `mmap` both select the single unified sparse-file store (kept for compatibility). |
 | `-heartbeat-interval` | `5s` | Heartbeat cadence to the ctl. |
 | `-download-concurrency` | `4` | Max concurrent piece fetches per file. |
 | `-lease-ttl` | `30s` | Session-lease duration for downstream `Subscribe` calls. |
@@ -161,10 +160,6 @@ per-piece files): one hole file per file written with `pwrite` and read with
   restart window, before the ctl re-syncs.
 - `ResolvePath` (Data RPC) returns the final `local_path` and whether the file is
   currently present.
-
-The `file` store (`-store file`) keeps one readable file per piece:
-`<download-path>/<basename>_<index>.piece` plus `<basename>.meta` holding the
-total size.
 
 ## gRPC message size
 

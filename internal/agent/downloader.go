@@ -251,7 +251,10 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 		return data, nil
 	}
 	if index < 0 || index >= d.numPieces {
-		return nil, fmt.Errorf("%w: piece %d out of range", errPieceFailed, index)
+		// A second request for the same file with a LARGER size is the common
+		// cause: ensureSizeLocked only records the first size, so the extra
+		// pieces are unknown. Hint at the mismatch so the caller can fix it.
+		return nil, fmt.Errorf("%w: piece %d out of range (file size %d; a larger second size is a size mismatch)", errPieceFailed, index, d.size)
 	}
 
 	w := &pieceWaiter{ch: make(chan error, 1)}

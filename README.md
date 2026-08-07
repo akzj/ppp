@@ -111,8 +111,7 @@ docs/deployment.md    deployment reference
 - HTTP/HTTPS and S3/OSS sources with mirror failover (see `docs/deployment.md`).
 - Unified sparse-file piece store (one hole file per file + bbolt index,
   `pwrite`/`pread`, no mmap) with crash recovery: a mid-download resumes from
-  the persisted index after a restart. The `-store` flag (`file|mmap`) is a
-  deprecated compatibility alias for the same implementation.
+  the persisted index after a restart.
 - Cancel/ban/unban with per-node local persistence (`banned.db`), effective even in
   the restart window before the ctl sync.
 

@@ -39,9 +39,6 @@ type Config struct {
 	Role pppv1.Node_Role
 	// DownloadPath is the directory for the local piece store.
 	DownloadPath string
-	// Store is a deprecated compatibility flag: "file" and "mmap" both select
-	// the single unified sparse-file store. Kept for command-line compat.
-	Store string
 	// HeartbeatInterval is how often the agent heartbeats to the ctl.
 	HeartbeatInterval time.Duration
 	// DownloadConcurrency bounds concurrent piece fetches per file.
@@ -67,7 +64,6 @@ func DefaultConfig() *Config {
 	return &Config{
 		Addr:                ":0",
 		DownloadPath:        "./ppp-data",
-		Store:               "mmap",
 		HeartbeatInterval:   5 * time.Second,
 		DownloadConcurrency: 4,
 		LeaseTTL:            30 * time.Second,
@@ -82,7 +78,6 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Tree, "tree", c.Tree, "tree id this node belongs to")
 	fs.StringVar(&c.role, "role", "member", "node role: root|member")
 	fs.StringVar(&c.DownloadPath, "download-path", c.DownloadPath, "directory for piece storage")
-	fs.StringVar(&c.Store, "store", c.Store, "piece store: mmap (default) or file")
 	fs.DurationVar(&c.HeartbeatInterval, "heartbeat-interval", c.HeartbeatInterval, "heartbeat interval")
 	fs.IntVar(&c.DownloadConcurrency, "download-concurrency", c.DownloadConcurrency, "max concurrent piece fetches per file")
 	fs.DurationVar(&c.LeaseTTL, "lease-ttl", c.LeaseTTL, "session lease TTL")
