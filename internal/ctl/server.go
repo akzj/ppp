@@ -469,12 +469,17 @@ func (s *Server) SyncBannedList(_ context.Context, req *pppv1.SyncBannedListRequ
 // ============ Job orchestration ============
 
 // validFilename is the control plane's basename check for job filenames
-// (mirrors the agent's validBasename; the packages are independent).
+// (mirrors the agent's validBasename; the packages are independent). The
+// ".cds." marker is reserved for the agent's sparse store internals and is
+// rejected so a job cannot target an internal path.
 func validFilename(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
-	return !strings.ContainsAny(name, `/\`)
+	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return !strings.Contains(name, ".cds.")
 }
 
 func (s *Server) CreateJob(_ context.Context, req *pppv1.CreateJobRequest) (*pppv1.CreateJobResponse, error) {

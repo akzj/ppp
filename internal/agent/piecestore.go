@@ -11,13 +11,20 @@ import (
 var ErrPieceNotFound = errors.New("agent: piece not found")
 
 // validBasename reports whether name is a safe, tree-agnostic file basename:
-// non-empty, not "." or "..", and free of path separators (so it cannot escape
-// the download path). The store keys every file by its basename.
+// non-empty, not "." or "..", free of path separators (so it cannot escape the
+// download path), and not containing the reserved ".cds." marker. The marker is
+// used by the sparse store for internal files (<basename>.cds.pieces and
+// <basename>.cds.index), so a file literally named "foo.cds.pieces" would
+// collide with the pieces path of "foo"; such names are rejected. The store
+// keys every file by its basename.
 func validBasename(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
 	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	if strings.Contains(name, ".cds.") {
 		return false
 	}
 	return true

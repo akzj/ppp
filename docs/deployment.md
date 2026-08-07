@@ -133,6 +133,10 @@ the same.
     single-pass runs) under this tight cap because TSan's shadow and the Go
     arena collide in the constrained address space; the code is race-clean
     (0 data races, suite green).
+  - The residual flake is also bounded by the thread limit (`ulimit -u`, 4096
+    on this machine): TSan maps one OS thread per goroutine, so a shared,
+    near-limit thread budget can push allocation over the edge. Raise it if
+    permitted, or keep repeated race runs at `-count ≤ 3`.
 
 ## Known limitations (deployment-relevant)
 
