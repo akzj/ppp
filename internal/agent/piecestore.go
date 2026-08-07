@@ -49,6 +49,9 @@ type PieceStore interface {
 	Seal(filename string, size int64, metadataBytes []byte) error
 	// IsComplete reports whether the file is fully downloaded.
 	IsComplete(filename string) bool
+	// ReadMetadata returns the sealed metadata sidecar bytes (ok=false when
+	// absent).
+	ReadMetadata(filename string) (data []byte, ok bool, err error)
 	// Size returns the recorded file size (0 when unknown).
 	Size(filename string) int64
 	// PieceCount returns how many pieces are stored.

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"hash/crc64"
@@ -140,6 +141,107 @@ func (s *DataServer) pieceResponse(key *pppv1.TreeKey, index int64, data []byte)
 	return &pppv1.GetPieceResponse{Result: &pppv1.GetPieceResponse_Piece{
 		Piece: &pppv1.Piece{Info: info, Data: data},
 	}}
+}
+
+// metadataChunkSize is the GetMetadata stream chunk size.
+const metadataChunkSize = 64 << 10
+
+// sealedFileInfo returns the FileInfo of a locally sealed artifact (ok=false
+// when absent or unsealed). The metadata sidecar is authoritative: the
+// metadata_id is SHA-256 over its bytes.
+func (s *DataServer) sealedFileInfo(key *pppv1.TreeKey) (*pppv1.FileInfo, bool) {
+	meta, ok, err := s.store.ReadMetadata(key.GetFilename())
+	if err != nil || !ok {
+		return nil, false
+	}
+	if !s.store.IsComplete(key.GetFilename()) {
+		return nil, false
+	}
+	m, err := DecodeMetadata(meta)
+	if err != nil {
+		return nil, false
+	}
+	return &pppv1.FileInfo{
+		Key:             key,
+		FileSize:        m.FileSize,
+		PieceSize:       m.PieceSize,
+		PieceCount:      int64(m.PieceCount),
+		MetadataId:      MetadataID(meta),
+		MetadataSize:    int64(len(meta)),
+		DigestAlgorithm: m.DigestAlgo,
+	}, true
+}
+
+// GetFileInfo returns the sealed artifact's info (§5.1): banned -> BANNED;
+// sealed -> FileInfo; building -> NOT_READY; no artifact -> NOT_FOUND (no
+// build is triggered — a root builds only via Job, a non-root via GetPiece).
+func (s *DataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
+	key := req.GetKey()
+	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key (tree_id, filename) is required")
+	}
+	if msg := s.validateKey(key.GetTreeId(), key.GetFilename()); msg != "" {
+		return nil, status.Error(codes.InvalidArgument, msg)
+	}
+	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+			Error: &pppv1.Error{Code: pppv1.Error_BANNED, Message: "file is banned"},
+		}}, nil
+	}
+	if info, ok := s.sealedFileInfo(key); ok {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Info{Info: info}}, nil
+	}
+	if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+			Error: &pppv1.Error{Code: pppv1.Error_NOT_READY, Message: "artifact is building"},
+		}}, nil
+	}
+	return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+		Error: &pppv1.Error{Code: pppv1.Error_NOT_FOUND, Message: "artifact not found"},
+	}}, nil
+}
+
+// GetMetadata streams the sealed metadata bytes in chunks (§5.1): banned /
+// not-ready / not-found / content-conflict are returned as gRPC statuses
+// (the MetadataChunk message has no error field); a sealed artifact with a
+// matching metadata_id streams its canonical bytes.
+func (s *DataServer) GetMetadata(req *pppv1.GetMetadataRequest, stream pppv1.Data_GetMetadataServer) error {
+	key := req.GetKey()
+	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" {
+		return status.Error(codes.InvalidArgument, "key (tree_id, filename) is required")
+	}
+	if msg := s.validateKey(key.GetTreeId(), key.GetFilename()); msg != "" {
+		return status.Error(codes.InvalidArgument, msg)
+	}
+	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
+		return status.Error(codes.PermissionDenied, "file is banned")
+	}
+	meta, ok, err := s.store.ReadMetadata(key.GetFilename())
+	if err != nil || !ok || !s.store.IsComplete(key.GetFilename()) {
+		if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
+			return status.Error(codes.FailedPrecondition, "artifact is building")
+		}
+		return status.Error(codes.NotFound, "artifact not found")
+	}
+	want := req.GetMetadataId()
+	if len(want) > 0 && !bytes.Equal(want, MetadataID(meta)) {
+		return status.Error(codes.FailedPrecondition, "content conflict: metadata_id mismatch")
+	}
+	metaID := MetadataID(meta)
+	for off := 0; off < len(meta); off += metadataChunkSize {
+		end := off + metadataChunkSize
+		if end > len(meta) {
+			end = len(meta)
+		}
+		if err := stream.Send(&pppv1.MetadataChunk{
+			MetadataId: metaID,
+			Offset:     int64(off),
+			Data:       meta[off:end],
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DownloadFile streams whole-file download progress for leaf consumers.
