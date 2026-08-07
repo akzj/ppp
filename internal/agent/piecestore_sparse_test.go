@@ -303,3 +303,27 @@ func TestSparseStoreMetadataSidecar(t *testing.T) {
 		t.Fatal("WriteMetadata accepted an unsafe name")
 	}
 }
+
+// TestSparseStoreDeleteCleansSidecar verifies the P2 fix: Delete removes the
+// .cds.metadata sidecar along with the pieces/index/final artifact.
+func TestSparseStoreDeleteCleansSidecar(t *testing.T) {
+	st := newSparseTestStore(t, "").(*sparsePieceStore)
+	if err := st.Put("a.bin", 0, []byte("x")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := st.MarkComplete("a.bin", 1); err != nil {
+		t.Fatalf("MarkComplete: %v", err)
+	}
+	if err := st.WriteMetadata("a.bin", []byte("meta")); err != nil {
+		t.Fatalf("WriteMetadata: %v", err)
+	}
+	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || !ok {
+		t.Fatalf("ReadMetadata before delete = (%v, %v), want present", ok, err)
+	}
+	if err := st.Delete("a.bin"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || ok {
+		t.Fatalf("ReadMetadata after Delete = (%v, %v), want (false, nil)", ok, err)
+	}
+}

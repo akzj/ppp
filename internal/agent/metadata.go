@@ -19,7 +19,8 @@ import (
 //     strings + raw 32-byte digests; nothing map-ordered, timestamped or
 //     node/Job-ID-derived can leak in, so identical fields always produce
 //     identical bytes and therefore the same metadata_id;
-//   - matches the design's "固定版本、确定性编码的二进制格式";
+//   - matches the design's fixed-version, deterministically-encoded binary
+//     format;
 //   - the digest array is exactly piece_count×32 raw SHA-256 bytes (§3.3 size
 //     math: 25,600 pieces × 32 = 800 KiB).
 //
@@ -227,6 +228,12 @@ func DecodeMetadata(data []byte) (*FileMetadataV1, error) {
 	fileDigest, err := r.bytes(MetadataDigestSize)
 	if err != nil {
 		return nil, errors.New("metadata: truncated file_digest")
+	}
+	// Pre-validate the digest-array length BEFORE allocating: a hostile header
+	// can claim an enormous piece_count (up to uint32max), and allocating the
+	// slice first would OOM. int64 math prevents the multiplication overflow.
+	if int64(len(r.data)-r.pos) < int64(pieceCount)*MetadataDigestSize {
+		return nil, fmt.Errorf("metadata: piece_count %d exceeds data length", pieceCount)
 	}
 	pieceDigests := make([][]byte, 0, pieceCount)
 	for i := uint32(0); i < pieceCount; i++ {

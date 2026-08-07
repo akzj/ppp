@@ -451,5 +451,6 @@ func (s *sparsePieceStore) Delete(filename string) error {
 	_ = os.Remove(piecesPath)
 	_ = os.Remove(indexPath)
 	_ = os.Remove(finalPath)
+	_ = s.DeleteMetadata(filename) // the .cds.metadata sidecar is part of the artifact
 	return nil
 }

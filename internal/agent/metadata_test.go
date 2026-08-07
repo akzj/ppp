@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"crypto/sha256"
+	"strings"
 	"testing"
 )
 
@@ -150,4 +151,34 @@ func mustEncodedMetadata(t *testing.T) []byte {
 		t.Fatalf("Encode: %v", err)
 	}
 	return data
+}
+
+// TestMetadataDecodeRejectsHugePieceCount locks the P1 OOM/DoS fix: a header
+// claiming an enormous piece_count must be rejected immediately, before any
+// large allocation, with a clear error.
+func TestMetadataDecodeRejectsHugePieceCount(t *testing.T) {
+	header := func(pieceCount uint32) []byte {
+		// minimal valid header: magic + version + empty filename + sizes +
+		// empty algorithm + 32-byte file digest
+		data := make([]byte, 0, 64)
+		data = append(data, metadataMagic[:]...)
+		data = append(data, MetadataMagicVersion)
+		data = append(data, 0, 0)                         // filename length 0
+		data = append(data, 0, 0, 0, 0, 0, 0, 0, 100)     // file_size 100 (i64 BE)
+		data = append(data, 0, 0, 0, 0, 0x00, 0x10, 0, 0) // piece_size 1MiB
+		data = append(data, byte(pieceCount>>24), byte(pieceCount>>16), byte(pieceCount>>8), byte(pieceCount))
+		data = append(data, 0, 0)                                // algorithm length 0
+		data = append(data, make([]byte, MetadataDigestSize)...) // file digest
+		return data
+	}
+	for _, n := range []uint32{1_000_000, ^uint32(0)} {
+		data := header(n)
+		_, err := DecodeMetadata(data)
+		if err == nil {
+			t.Fatalf("DecodeMetadata(piece_count=%d) = nil, want rejection", n)
+		}
+		if !strings.Contains(err.Error(), "exceeds data length") {
+			t.Fatalf("DecodeMetadata(piece_count=%d) err = %v, want 'exceeds data length'", n, err)
+		}
+	}
 }
