@@ -109,8 +109,10 @@ docs/deployment.md    deployment reference
 - Piece-level distribution over gRPC with session leases (`Subscribe`/`Unsubscribe`)
   so upstreams stop fetching when downstreams stop needing.
 - HTTP/HTTPS and S3/OSS sources with mirror failover (see `docs/deployment.md`).
-- Memory-mapped piece store (`-store mmap`, default) with crash recovery: a
-  mid-download resumes from the persisted index after a restart.
+- Unified sparse-file piece store (one hole file per file + bbolt index,
+  `pwrite`/`pread`, no mmap) with crash recovery: a mid-download resumes from
+  the persisted index after a restart. The `-store` flag (`file|mmap`) is a
+  deprecated compatibility alias for the same implementation.
 - Cancel/ban/unban with per-node local persistence (`banned.db`), effective even in
   the restart window before the ctl sync.
 
@@ -122,8 +124,8 @@ docs/deployment.md    deployment reference
   `AWS_SECRET_ACCESS_KEY`); there is no per-source credential store.
 - **Job-driven downloads are root-only**: members pull on demand via `GetPiece`
   (the `watchJobsLoop` is implemented for roots).
-- **In-progress files are not evicted from the mmap store cache** on silent stop: a
-  downloader that stops without completing leaves its `.cds.pieces` mmap open until
+- **In-progress files are not evicted from the store's open-cache** on silent stop: a
+  downloader that stops without completing leaves its `.cds.pieces` handle open until
   the agent stops (completed files are idle-evicted after 60 s).
 - **Single-instance ctl**: no HA/replication of the control plane yet.
 - **Progress reporting is best-effort** (the ctl persists the latest per-node report;

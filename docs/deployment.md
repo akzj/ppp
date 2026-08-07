@@ -31,7 +31,7 @@ For the design, see [design-v2.md](design-v2.md); for a quick start, see the
 | `-tree` | (required) | Tree id this node belongs to, e.g. `app/env/idc`. |
 | `-role` | `member` | `root` or `member`. **Required for the topology**: a root registers with role ROOT; members are leaves/middle layers. |
 | `-download-path` | `./ppp-data` | Directory for the local piece store. |
-| `-store` | `mmap` | Piece store: `mmap` (default) or `file` (fallback). |
+| `-store` | `mmap` | Deprecated: `file` and `mmap` both select the single unified sparse-file store (kept for compatibility). |
 | `-heartbeat-interval` | `5s` | Heartbeat cadence to the ctl. |
 | `-download-concurrency` | `4` | Max concurrent piece fetches per file. |
 | `-lease-ttl` | `30s` | Session-lease duration for downstream `Subscribe` calls. |
@@ -76,30 +76,39 @@ S3/OSS credentials come from the environment: `AWS_ACCESS_KEY_ID` and
 
 ## Storage layout
 
-Default store is `mmap`:
+The store is **tree-agnostic**: download paths contain only the file basename, never
+the tree/app/env/idc (tree identity is a control-plane concept; the data plane
+rejects requests for a different tree). Filenames are enforced to be safe
+basenames (no path separators, not `.`/`..`).
+
+The store is a single unified **sparse-file** implementation (no mmap, no
+per-piece files): one hole file per file written with `pwrite` and read with
+`pread`, plus a bbolt index.
 
 ```
-<download-path>/<tree-hex>/<file-hex>.cds.pieces   mmap'd piece data (in progress)
-<download-path>/<tree-hex>/<file-hex>.cds.index    bbolt index: piece index -> PieceInfo
-<download-path>/<tree-hex>/<file-hex>.cds.complete final file after MarkComplete
+<download-path>/<basename>            final file after MarkComplete
+<download-path>/<basename>.cds.pieces sparse piece data (one file; missing pieces = holes)
+<download-path>/<basename>.cds.index  bbolt index: piece index -> PieceInfo
 ```
 
-- `tree-hex` = hex(tree id), `file-hex` = hex(filename) — names cannot escape the
-  download path.
-- On open: a completed file is mmap'd read-only (every piece present); an in-progress
-  file is mmap'd read-write and its existence map is rebuilt from the bbolt index,
-  so a crash mid-download resumes.
-- `MarkComplete` flushes, unmaps, drops the index and renames `.cds.pieces` to
-  `.cds.complete`.
+- On open: if `<basename>` exists the file is complete and opened read-only
+  (every piece present); otherwise the `.cds.pieces` + `.cds.index` pair is
+  opened and the existence map is rebuilt from the bbolt index, so a
+  crash mid-download resumes.
+- `MarkComplete` flushes, unmaps, drops the index and **renames `.cds.pieces` to
+  `<basename>`** — the final file is the real, readable artifact.
 - Completed files idle longer than 60 s are evicted from the in-memory cache
   (unmapped, reopened on demand). In-progress files stay open while the downloader
   is active.
 - `banned.db` (bbolt) in the same download path persists the local banned list;
   it is loaded on startup so a restarted node rejects banned files during the
   restart window, before the ctl re-syncs.
+- `ResolvePath` (Data RPC) returns the final `local_path` and whether the file is
+  currently present.
 
-The `file` store (`-store file`) keeps one file per piece:
-`<dir>/<hex(tree\x00file)>/<index>.piece` plus a meta file with the total size.
+The `file` store (`-store file`) keeps one readable file per piece:
+`<download-path>/<basename>_<index>.piece` plus `<basename>.meta` holding the
+total size.
 
 ## gRPC message size
 
@@ -120,6 +129,10 @@ the same.
   - raise `ulimit -v` (e.g. `ulimit -v unlimited`) on machines that permit it
     before `go test -race -count=N`, or
   - run `-count=N` without `-race`.
+  - Note: the race detector's shadow allocation can still flake (~1 in 10
+    single-pass runs) under this tight cap because TSan's shadow and the Go
+    arena collide in the constrained address space; the code is race-clean
+    (0 data races, suite green).
 
 ## Known limitations (deployment-relevant)
 

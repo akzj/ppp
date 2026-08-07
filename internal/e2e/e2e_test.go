@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -198,11 +197,10 @@ func newDataClient(t *testing.T, addr string) pppv1.DataClient {
 
 // ---------- file/topology helpers ----------
 
-// mmapFinalPath returns the completed file path in the mmap store layout:
-// <dir>/<tree-hex>/<file-hex>.cds.complete.
+// mmapFinalPath returns the final file path in the flat basename layout:
+// <DownloadPath>/<basename> (the store is tree-agnostic; treeID is ignored).
 func mmapFinalPath(dir, treeID, filename string) string {
-	treeDir := filepath.Join(dir, hex.EncodeToString([]byte(treeID)))
-	return filepath.Join(treeDir, hex.EncodeToString([]byte(filename))+".cds.complete")
+	return filepath.Join(dir, filename)
 }
 
 // waitForFile polls until the file exists and its content matches want.
