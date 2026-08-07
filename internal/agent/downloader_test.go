@@ -62,6 +62,9 @@ type fakeDataServer struct {
 	// blockPiece blocks GetPiece for a specific index (when release is set);
 	// blockPiece < 0 blocks every GetPiece (the historical behavior).
 	blockPiece int64
+	// bannedMeta serves GetMetadata with PermissionDenied while GetFileInfo
+	// still succeeds (the banned-consistency path, C5).
+	bannedMeta bool
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -144,6 +147,9 @@ func (f *fakeDataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRe
 func (f *fakeDataServer) GetMetadata(req *pppv1.GetMetadataRequest, stream pppv1.Data_GetMetadataServer) error {
 	if req.GetKey() == nil {
 		return status.Error(codes.InvalidArgument, "key required")
+	}
+	if f.bannedMeta {
+		return status.Error(codes.PermissionDenied, "file is banned")
 	}
 	metaBytes, info, err := f.buildMetadata(req.GetKey().GetTreeId(), req.GetKey().GetFilename())
 	if err != nil {

@@ -13,7 +13,9 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 // Fetch tuning for the per-file downloader.
@@ -594,6 +596,13 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 	}
 	stream, err := client.GetMetadata(callCtx, &pppv1.GetMetadataRequest{Key: key, MetadataId: info.GetMetadataId()})
 	if err != nil {
+		// Banned consistency: the server returns PermissionDenied for a
+		// banned file (the MetadataChunk message has no error field); map it
+		// to errFileBanned so the downloader fails the file like the
+		// GetFileInfo BANNED path.
+		if status.Code(err) == codes.PermissionDenied {
+			return nil, nil, 0, errFileBanned
+		}
 		return nil, nil, 0, err
 	}
 	// P1-2: bound the accumulation by the advertised metadata size (capped) so
@@ -610,6 +619,11 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 			break
 		}
 		if err != nil {
+			// Banned consistency (C5): the server sends PermissionDenied for a
+			// banned file (the MetadataChunk message has no error field).
+			if status.Code(err) == codes.PermissionDenied {
+				return nil, nil, 0, errFileBanned
+			}
 			return nil, nil, 0, err
 		}
 		if int64(len(buf))+int64(len(chunk.GetData())) > limit {
@@ -710,7 +724,7 @@ func (d *Downloader) sealAndPublishLocked() error {
 	// metadata, never a locally regenerated one. The root (no bound
 	// metadata) self-builds below (C2/C3).
 	if d.metaBytes != nil {
-		return d.store.Seal(d.filename, d.size, d.metaBytes)
+		return d.sealChecked(d.metaBytes)
 	}
 	pieceCount := int(d.numPieces)
 	digests := make([][]byte, pieceCount)
@@ -737,6 +751,20 @@ func (d *Downloader) sealAndPublishLocked() error {
 	metaBytes, err := m.Encode()
 	if err != nil {
 		return err
+	}
+	return d.sealChecked(metaBytes)
+}
+
+// sealChecked publishes the artifact bytes only when the local sealed
+// artifact (if any) has the SAME metadata_id: a sequential rebuild that
+// would overwrite a different sealed artifact is CONTENT_CONFLICT (C5/C6) —
+// the existing artifact is never overwritten. Identical content (same id)
+// re-seals idempotently.
+func (d *Downloader) sealChecked(metaBytes []byte) error {
+	if existing, ok, _ := d.store.ReadMetadata(d.filename); ok {
+		if !bytes.Equal(MetadataID(existing), MetadataID(metaBytes)) {
+			return fmt.Errorf("%w: existing sealed artifact has a different metadata_id", errContentConflict)
+		}
 	}
 	return d.store.Seal(d.filename, d.size, metaBytes)
 }
