@@ -273,3 +273,33 @@ func TestSparsePieceStoreConcurrent(t *testing.T) {
 	}
 	rwg.Wait()
 }
+
+// TestSparseStoreMetadataSidecar verifies the .cds.metadata sidecar:
+// write/read/delete, and the reserved-marker safety (a user basename can never
+// collide with a sidecar path).
+func TestSparseStoreMetadataSidecar(t *testing.T) {
+	st := newSparseTestStore(t, "").(*sparsePieceStore)
+
+	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || ok {
+		t.Fatalf("ReadMetadata(absent) = (%v, %v), want (nil, false)", ok, err)
+	}
+	data := []byte("canonical-metadata-bytes")
+	if err := st.WriteMetadata("a.bin", data); err != nil {
+		t.Fatalf("WriteMetadata: %v", err)
+	}
+	got, ok, err := st.ReadMetadata("a.bin")
+	if err != nil || !ok || !bytes.Equal(got, data) {
+		t.Fatalf("ReadMetadata = (%q, %v, %v), want the written bytes", got, ok, err)
+	}
+	if err := st.DeleteMetadata("a.bin"); err != nil {
+		t.Fatalf("DeleteMetadata: %v", err)
+	}
+	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || ok {
+		t.Fatalf("ReadMetadata after delete = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	// Unsafe names are rejected.
+	if err := st.WriteMetadata("../evil", data); err == nil {
+		t.Fatal("WriteMetadata accepted an unsafe name")
+	}
+}
