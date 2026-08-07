@@ -39,8 +39,8 @@ type Config struct {
 	Role pppv1.Node_Role
 	// DownloadPath is the directory for the local piece store.
 	DownloadPath string
-	// Store selects the piece store implementation: "mmap" (default) or
-	// "file" (fallback).
+	// Store is a deprecated compatibility flag: "file" and "mmap" both select
+	// the single unified sparse-file store. Kept for command-line compat.
 	Store string
 	// HeartbeatInterval is how often the agent heartbeats to the ctl.
 	HeartbeatInterval time.Duration

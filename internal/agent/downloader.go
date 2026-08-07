@@ -247,7 +247,7 @@ func (d *Downloader) stopSilent() {
 
 // WaitPiece returns the piece bytes, downloading the file if necessary.
 func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error) {
-	if data, err := d.store.Get(d.treeID, d.filename, index); err == nil {
+	if data, err := d.store.Get(d.filename, index); err == nil {
 		return data, nil
 	}
 	if index < 0 || index >= d.numPieces {
@@ -298,7 +298,7 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 		d.mu.Unlock()
 		return nil, ctx.Err()
 	}
-	return d.store.Get(d.treeID, d.filename, index)
+	return d.store.Get(d.filename, index)
 }
 
 // Progress returns the approximate downloaded bytes, total size, completion
@@ -306,7 +306,7 @@ func (d *Downloader) WaitPiece(ctx context.Context, index int64) ([]byte, error)
 func (d *Downloader) Progress() (downloaded int64, size int64, complete bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	n := int64(d.store.PieceCount(d.treeID, d.filename)) * PieceSize
+	n := int64(d.store.PieceCount(d.filename)) * PieceSize
 	if n > d.size {
 		n = d.size
 	}
@@ -446,10 +446,10 @@ func (d *Downloader) nextMissingLocked() int64 {
 		}
 		// A piece demand-cleared once must wait out its cooldown before being
 		// dispatched again, even if the cooldown was cleared (P2-1 anti-flood).
-		if d.cooldownCleared[i] && !d.store.HasPiece(d.treeID, d.filename, i) && now.Before(d.cooldown[i]) {
+		if d.cooldownCleared[i] && !d.store.HasPiece(d.filename, i) && now.Before(d.cooldown[i]) {
 			continue
 		}
-		if !d.store.HasPiece(d.treeID, d.filename, i) {
+		if !d.store.HasPiece(d.filename, i) {
 			return i
 		}
 	}
@@ -462,12 +462,12 @@ func (d *Downloader) checkCompleteLocked() {
 		return
 	}
 	for i := int64(0); i < d.numPieces; i++ {
-		if !d.store.HasPiece(d.treeID, d.filename, i) {
+		if !d.store.HasPiece(d.filename, i) {
 			return
 		}
 	}
 	d.complete = true
-	_ = d.store.MarkComplete(d.treeID, d.filename, d.size)
+	_ = d.store.MarkComplete(d.filename, d.size)
 }
 
 // fetchPiece fetches one piece with retries, stores it and notifies waiters.
@@ -479,7 +479,7 @@ func (d *Downloader) fetchPiece(index int64) {
 	defer func() {
 		d.mu.Lock()
 		delete(d.inflight, index)
-		if d.cooldownCleared[index] && !d.store.HasPiece(d.treeID, d.filename, index) && d.fileErr == nil {
+		if d.cooldownCleared[index] && !d.store.HasPiece(d.filename, index) && d.fileErr == nil {
 			d.cooldown[index] = time.Now().Add(pieceCooldown)
 		}
 		d.mu.Unlock()
@@ -536,7 +536,7 @@ func (d *Downloader) fetchPiece(index int64) {
 		d.mu.Unlock()
 		return
 	}
-	if err := d.store.Put(d.treeID, d.filename, index, data); err != nil {
+	if err := d.store.Put(d.filename, index, data); err != nil {
 		return
 	}
 	d.pieceStored(index)

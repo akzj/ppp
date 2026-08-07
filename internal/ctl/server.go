@@ -9,6 +9,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -467,9 +468,21 @@ func (s *Server) SyncBannedList(_ context.Context, req *pppv1.SyncBannedListRequ
 
 // ============ Job orchestration ============
 
+// validFilename is the control plane's basename check for job filenames
+// (mirrors the agent's validBasename; the packages are independent).
+func validFilename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`)
+}
+
 func (s *Server) CreateJob(_ context.Context, req *pppv1.CreateJobRequest) (*pppv1.CreateJobResponse, error) {
 	if req.GetTreeId() == "" || req.GetFilename() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tree_id and filename are required")
+	}
+	if !validFilename(req.GetFilename()) {
+		return nil, status.Error(codes.InvalidArgument, "filename must be a basename (no path separators)")
 	}
 
 	tree, err := s.store.GetTree(req.GetTreeId())

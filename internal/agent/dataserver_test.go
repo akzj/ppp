@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,9 +29,10 @@ func newTestDataServer(t *testing.T) *DataServer {
 	if err != nil {
 		t.Fatalf("NewFilePieceStore: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	topo := &fakeTopology{addrs: nil}
 	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{}, nil, "me", 2, 30*time.Second)
-	return NewDataServer("me", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
+	return NewDataServer("me", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
 }
 
 func bannedResp(t *testing.T, resp *pppv1.GetPieceResponse) bool {
@@ -110,5 +112,60 @@ func TestDataServerDownloadFileBanned(t *testing.T) {
 	}
 	if len(stream.msgs) != 1 || stream.msgs[0].GetState() != pppv1.ProgressState_BANNED {
 		t.Fatalf("DownloadFile(banned) msgs = %v, want one BANNED state", stream.msgs)
+	}
+	// local_path is populated as <download-path>/<basename>.
+	wantPath := filepath.Join(ds.downloadPath, "a.bin")
+	if stream.msgs[0].GetLocalPath() != wantPath {
+		t.Fatalf("DownloadFile(banned) local_path = %q, want %q", stream.msgs[0].GetLocalPath(), wantPath)
+	}
+}
+
+// TestDataServerResolvePath verifies the ResolvePath RPC: local_path for a
+// present and an absent file, and rejection of a tree mismatch or unsafe
+// filename.
+func TestDataServerResolvePath(t *testing.T) {
+	ds := newTestDataServer(t)
+
+	// Absent file: local_path is still resolved, exist=false.
+	resp, err := ds.ResolvePath(context.Background(), &pppv1.ResolvePathRequest{
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "absent.bin"},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePath(absent): %v", err)
+	}
+	if resp.GetExist() {
+		t.Fatal("ResolvePath(absent).exist = true, want false")
+	}
+	wantPath := filepath.Join(ds.downloadPath, "absent.bin")
+	if resp.GetLocalPath() != wantPath {
+		t.Fatalf("ResolvePath(absent).local_path = %q, want %q", resp.GetLocalPath(), wantPath)
+	}
+
+	// Present file (Put + MarkComplete): exist=true.
+	if err := ds.store.Put("a.bin", 0, []byte("x")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := ds.store.MarkComplete("a.bin", 1); err != nil {
+		t.Fatalf("MarkComplete: %v", err)
+	}
+	resp, err = ds.ResolvePath(context.Background(), &pppv1.ResolvePathRequest{
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePath(present): %v", err)
+	}
+	if !resp.GetExist() || resp.GetLocalPath() != filepath.Join(ds.downloadPath, "a.bin") {
+		t.Fatalf("ResolvePath(present) = %+v, want exist=true local_path=<download>/a.bin", resp)
+	}
+
+	// Tree mismatch and unsafe filename are rejected.
+	for _, key := range []*pppv1.TreeKey{
+		{TreeId: "other", Filename: "a.bin"},
+		{TreeId: "t1", Filename: "a/b.bin"},
+		{TreeId: "t1", Filename: ".."},
+	} {
+		if _, err := ds.ResolvePath(context.Background(), &pppv1.ResolvePathRequest{Key: key}); err == nil {
+			t.Fatalf("ResolvePath(%v) = nil error, want rejection", key)
+		}
 	}
 }

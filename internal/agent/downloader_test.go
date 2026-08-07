@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc64"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -147,16 +148,42 @@ func startFakeData(t *testing.T, fake *fakeDataServer) (string, func()) {
 	return lis.Addr().String(), func() { gs.Stop() }
 }
 
+// newTestStoreDir creates a store root dir whose removal is retried: a
+// downloader goroutine can be mid-open (creating store files) when the test
+// ends, and the retry absorbs that cleanup race (t.TempDir does not retry).
+func newTestStoreDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ppp-store-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 100; i++ {
+			if err := os.RemoveAll(dir); err == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return dir
+}
+
 func newTestManager(t *testing.T, topo *fakeTopology, src Source) (*DownloaderManager, PieceStore) {
 	t.Helper()
-	store, err := NewFilePieceStore(t.TempDir() + "/pieces")
+	store, err := NewFilePieceStore(newTestStoreDir(t))
 	if err != nil {
 		t.Fatalf("NewFilePieceStore: %v", err)
 	}
 	if src == nil {
 		src = &fakeSource{data: []byte("x")}
 	}
-	return NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4, 30*time.Second), store
+	dm := NewDownloaderManager(store, NewBannedList(), topo, src, nil, "me", 4, 30*time.Second)
+	// Cleanup order (LIFO): stop the downloaders first (so no goroutine can
+	// create store files), then close the store's bbolt handles, then let the
+	// removal run on an empty directory.
+	t.Cleanup(dm.Close)
+	t.Cleanup(func() { _ = store.Close() })
+	return dm, store
 }
 
 // fakeSource serves a whole file split by pieceSize.
@@ -194,7 +221,7 @@ func TestDownloaderFetchesFromPeer(t *testing.T) {
 		t.Fatalf("piece = %q, want %q", got, content)
 	}
 	// A single-piece file is complete once its only piece is stored.
-	if !store.IsComplete("t1", "a.bin") {
+	if !store.IsComplete("a.bin") {
 		t.Fatal("single-piece file not marked complete after fetch")
 	}
 }
@@ -244,7 +271,7 @@ func TestDownloaderSourcePull(t *testing.T) {
 	if !done {
 		t.Fatal("file not marked complete after both pieces")
 	}
-	if !store.IsComplete("t1", "a.bin") || store.Size("t1", "a.bin") != int64(len(content)) {
+	if !store.IsComplete("a.bin") || store.Size("a.bin") != int64(len(content)) {
 		t.Fatal("completion marker not written")
 	}
 }

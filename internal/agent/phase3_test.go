@@ -187,7 +187,7 @@ func TestDownloaderHashZeroRejected(t *testing.T) {
 	if fake.requestCount() < 2 {
 		t.Fatalf("requests = %d, want >= 2 (hash=0 rejected then retried)", fake.requestCount())
 	}
-	if !store.HasPiece("t1", "a.bin", 0) {
+	if !store.HasPiece("a.bin", 0) {
 		t.Fatal("piece not stored after hash-0 retry")
 	}
 }
@@ -196,17 +196,17 @@ func TestDownloaderHashZeroRejected(t *testing.T) {
 // pieces.
 func TestBannedDiskCleanup(t *testing.T) {
 	ag := newTestAgent(t)
-	if err := ag.store.Put("t1", "a.bin", 0, []byte("x")); err != nil {
+	if err := ag.store.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if !ag.store.HasPiece("t1", "a.bin", 0) {
+	if !ag.store.HasPiece("a.bin", 0) {
 		t.Fatal("precondition: piece missing")
 	}
 	ag.applyBannedUpdate(&pppv1.BannedListUpdate{
 		Generation: 1,
 		Added:      []*pppv1.BannedFile{{TreeId: "t1", Filename: "a.bin"}},
 	})
-	if ag.store.HasPiece("t1", "a.bin", 0) {
+	if ag.store.HasPiece("a.bin", 0) {
 		t.Fatal("banned file pieces still on disk")
 	}
 	if !ag.banned.IsBanned("t1", "a.bin") {
@@ -235,7 +235,7 @@ func TestDownloaderReclaimed(t *testing.T) {
 	if dm.Get("t1", "a.bin") != nil {
 		t.Fatal("completed downloader not reclaimed from the manager")
 	}
-	if !store.HasPiece("t1", "a.bin", 0) {
+	if !store.HasPiece("a.bin", 0) {
 		t.Fatal("reclaimed downloader dropped its stored data")
 	}
 }

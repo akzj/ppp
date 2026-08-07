@@ -21,11 +21,11 @@ func TestAgentStopClosesStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	ms, ok := ag.store.(*mmapPieceStore)
+	ms, ok := ag.store.(*sparsePieceStore)
 	if !ok {
-		t.Fatalf("store = %T, want *mmapPieceStore", ag.store)
+		t.Fatalf("store = %T, want *sparsePieceStore", ag.store)
 	}
-	if err := ag.store.Put("t1", "f.bin", 0, []byte("x")); err != nil {
+	if err := ag.store.Put("f.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	ms.mu.Lock()
@@ -45,22 +45,22 @@ func TestAgentStopClosesStore(t *testing.T) {
 	}
 }
 
-// TestMmapStoreEvictsIdleComplete verifies completed (read-only) files are
+// TestSparseStoreEvictsIdleComplete verifies completed (read-only) files are
 // evicted from the open cache after completeIdleTTL and re-opened on demand.
-func TestMmapStoreEvictsIdleComplete(t *testing.T) {
+func TestSparseStoreEvictsIdleComplete(t *testing.T) {
 	old := completeIdleTTL
 	completeIdleTTL = 50 * time.Millisecond
 	defer func() { completeIdleTTL = old }()
 
 	dir := t.TempDir()
-	st := newMmapTestStore(t, dir)
-	if err := st.Put("t1", "a.bin", 0, []byte("x")); err != nil {
+	st := newSparseTestStore(t, dir)
+	if err := st.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := st.MarkComplete("t1", "a.bin", 1); err != nil {
+	if err := st.MarkComplete("a.bin", 1); err != nil {
 		t.Fatalf("MarkComplete: %v", err)
 	}
-	ms := st.(*mmapPieceStore)
+	ms := st.(*sparsePieceStore)
 	ms.mu.Lock()
 	if len(ms.open) != 1 {
 		ms.mu.Unlock()
@@ -71,23 +71,23 @@ func TestMmapStoreEvictsIdleComplete(t *testing.T) {
 	// Wait past the idle TTL, then open ANOTHER file (the lazy sweep runs on
 	// open) and the completed file must be evicted.
 	time.Sleep(80 * time.Millisecond)
-	if err := st.Put("t1", "b.bin", 0, []byte("y")); err != nil {
+	if err := st.Put("b.bin", 0, []byte("y")); err != nil {
 		t.Fatalf("Put(b): %v", err)
 	}
 	ms.mu.Lock()
-	_, stillOpen := ms.open["t1\x00a.bin"]
+	_, stillOpen := ms.open["a.bin"]
 	ms.mu.Unlock()
 	if stillOpen {
 		t.Fatal("idle completed file not evicted from the open cache")
 	}
 
 	// A later read re-opens it from disk.
-	got, err := st.Get("t1", "a.bin", 0)
+	got, err := st.Get("a.bin", 0)
 	if err != nil || string(got) != "x" {
 		t.Fatalf("Get after eviction = %q, %v; want x", got, err)
 	}
 	ms.mu.Lock()
-	_, reopened := ms.open["t1\x00a.bin"]
+	_, reopened := ms.open["a.bin"]
 	ms.mu.Unlock()
 	if !reopened {
 		t.Fatal("evicted file not re-opened on demand")

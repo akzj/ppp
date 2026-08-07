@@ -78,9 +78,9 @@ func TestDownloaderRestartAfterSilentStop(t *testing.T) {
 	close(fake.release) // let the restarted fetches through
 
 	waitFor(t, 5*time.Second, "file completes after restart", func() bool {
-		return store.IsComplete("t1", "a.bin")
+		return store.IsComplete("a.bin")
 	})
-	if !store.HasPiece("t1", "a.bin", 0) || !store.HasPiece("t1", "a.bin", 1) {
+	if !store.HasPiece("a.bin", 0) || !store.HasPiece("a.bin", 1) {
 		t.Fatal("not both pieces stored after restart")
 	}
 }
@@ -203,7 +203,7 @@ func TestThreeNodeChainStopPropagation(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	waitFor(t, 10*time.Second, "root has the file complete", func() bool {
-		return root.store.IsComplete("t1", "file.bin")
+		return root.store.IsComplete("file.bin")
 	})
 	// After completion the root's job-driven downloader is reclaimed.
 	waitFor(t, 5*time.Second, "root downloader reclaimed after job", func() bool {
@@ -227,7 +227,7 @@ func TestThreeNodeChainStopPropagation(t *testing.T) {
 		t.Fatalf("child GetPiece: %v", err)
 	}
 	waitFor(t, 10*time.Second, "parent fetched the file from root", func() bool {
-		return parent.store.HasPiece("t1", "file.bin", 1)
+		return parent.store.HasPiece("file.bin", 1)
 	})
 	// While the parent fetched, it held a subscription on the root (the
 	// propagation mechanism is also unit-covered by

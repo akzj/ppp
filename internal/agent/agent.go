@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -76,13 +77,13 @@ func NewAgent(cfg *Config) (*Agent, error) {
 
 // newPieceStore selects the piece store implementation from the config.
 func newPieceStore(cfg *Config) (PieceStore, error) {
+	// The -store flag is deprecated: file|mmap both select the single unified
+	// sparse-file store (kept for command-line compatibility).
 	switch cfg.Store {
-	case "", "mmap":
-		return NewMmapPieceStore(cfg.DownloadPath)
-	case "file":
-		return NewFilePieceStore(cfg.DownloadPath)
+	case "", "file", "mmap":
+		return NewPieceStore(cfg.DownloadPath)
 	default:
-		return nil, fmt.Errorf("agent: unknown store %q (want mmap|file)", cfg.Store)
+		return nil, fmt.Errorf("agent: unknown store %q (want file|mmap)", cfg.Store)
 	}
 }
 
@@ -111,7 +112,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
 		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
-	pppv1.RegisterDataServer(a.grpc, NewDataServer(a.nodeID, a.store, a.banned, a.dm, a.leases))
+	pppv1.RegisterDataServer(a.grpc, NewDataServer(a.nodeID, a.cfg.Tree, a.cfg.DownloadPath, a.store, a.banned, a.dm, a.leases))
 	go func() { _ = a.grpc.Serve(lis) }()
 
 	node := &pppv1.Node{Id: a.nodeID, Addr: a.addr, TreeId: a.cfg.Tree, Role: a.cfg.Role}
@@ -337,7 +338,7 @@ func (a *Agent) cancelBannedDownloaders(up *pppv1.BannedListUpdate) {
 		a.dm.CancelFile(f.GetTreeId(), f.GetFilename())
 		// P2-6: a banned file's local pieces are removed. Retention for files
 		// still needed by other jobs is deferred to phase 4.
-		_ = a.store.Delete(f.GetTreeId(), f.GetFilename())
+		_ = a.store.Delete(f.GetFilename())
 	}
 }
 
@@ -503,6 +504,7 @@ func (a *Agent) progressLoop(ctx context.Context) {
 				State: &pppv1.ProgressState{
 					JobId: d.jobID, TreeId: d.treeID, Filename: d.filename, Size: size,
 					DownloadedBytes: downloaded, Progress: progressPercent(downloaded, size), State: state,
+					LocalPath: filepath.Join(a.cfg.DownloadPath, d.filename),
 				},
 				NodeId: a.nodeID,
 			}

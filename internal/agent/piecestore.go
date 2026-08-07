@@ -1,141 +1,69 @@
 package agent
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
+	"strings"
 )
 
 // ErrPieceNotFound is returned by PieceStore.Get for a missing piece.
 var ErrPieceNotFound = errors.New("agent: piece not found")
 
-// PieceStore stores and retrieves file pieces locally. The interface isolates
-// the storage engine: phase 4 swaps the file implementation for mmap+bbolt.
+// validBasename reports whether name is a safe, tree-agnostic file basename:
+// non-empty, not "." or "..", and free of path separators (so it cannot escape
+// the download path). The store keys every file by its basename.
+func validBasename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return true
+}
+
+// PieceStore stores and retrieves file pieces locally, keyed by the file
+// basename. The store is deliberately tree-agnostic: tree identity is a
+// control-plane concept and never appears on disk (the download path is
+// <DownloadPath>/<basename>). The single implementation is a sparse data file
+// plus a bbolt index (see piecestore_sparse.go).
 type PieceStore interface {
 	// Put stores a piece.
-	Put(treeID, filename string, index int64, data []byte) error
+	Put(filename string, index int64, data []byte) error
 	// Get returns a piece or ErrPieceNotFound.
-	Get(treeID, filename string, index int64) ([]byte, error)
+	Get(filename string, index int64) ([]byte, error)
 	// HasPiece reports whether the piece exists.
-	HasPiece(treeID, filename string, index int64) bool
+	HasPiece(filename string, index int64) bool
 	// MarkComplete records the file as fully downloaded with its total size.
-	MarkComplete(treeID, filename string, size int64) error
+	MarkComplete(filename string, size int64) error
 	// IsComplete reports whether the file is fully downloaded.
-	IsComplete(treeID, filename string) bool
+	IsComplete(filename string) bool
 	// Size returns the recorded file size (0 when unknown).
-	Size(treeID, filename string) int64
+	Size(filename string) int64
 	// PieceCount returns how many pieces are stored.
-	PieceCount(treeID, filename string) int
+	PieceCount(filename string) int
 	// Delete removes every piece and the completion marker of a file.
-	Delete(treeID, filename string) error
-	// Close releases any underlying resources (mmaps, handles). It is a no-op
-	// for stateless implementations. Call at agent shutdown.
+	Delete(filename string) error
+	// Close releases any underlying resources (handles). Call at agent
+	// shutdown.
 	Close() error
 }
 
-// filePieceStore is a simple on-disk PieceStore: pieces live as
-// <dir>/<hex(tree\x00file)>/<index>.piece plus a meta file holding the total
-// size once the file is complete. Tree and file names are hex-encoded so
-// untrusted names cannot escape the download path.
-type filePieceStore struct {
-	dir string
-}
-
-// NewFilePieceStore creates the piece store rooted at dir.
-func NewFilePieceStore(dir string) (PieceStore, error) {
+// NewPieceStore creates the unified sparse-file piece store rooted at dir.
+func NewPieceStore(dir string) (PieceStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("agent: create piece dir: %w", err)
 	}
-	return &filePieceStore{dir: dir}, nil
+	return &sparsePieceStore{dir: dir, open: make(map[string]*sparseFile)}, nil
 }
 
-func (s *filePieceStore) fileDir(treeID, filename string) string {
-	key := hex.EncodeToString([]byte(treeID + "\x00" + filename))
-	return filepath.Join(s.dir, key)
-}
+// NewFilePieceStore is a deprecated alias: the unified sparse store is the
+// single implementation (the -store file|mmap flags are accepted for
+// compatibility and map here).
+func NewFilePieceStore(dir string) (PieceStore, error) { return NewPieceStore(dir) }
 
-func (s *filePieceStore) piecePath(treeID, filename string, index int64) string {
-	return filepath.Join(s.fileDir(treeID, filename), strconv.FormatInt(index, 10)+".piece")
-}
-
-func (s *filePieceStore) metaPath(treeID, filename string) string {
-	return filepath.Join(s.fileDir(treeID, filename), "meta")
-}
-
-func (s *filePieceStore) Put(treeID, filename string, index int64, data []byte) error {
-	dir := s.fileDir(treeID, filename)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	// Write to a temp file and rename so a crash cannot leave a torn piece.
-	tmp := s.piecePath(treeID, filename, index) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.piecePath(treeID, filename, index))
-}
-
-func (s *filePieceStore) Get(treeID, filename string, index int64) ([]byte, error) {
-	data, err := os.ReadFile(s.piecePath(treeID, filename, index))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrPieceNotFound
-		}
-		return nil, err
-	}
-	return data, nil
-}
-
-func (s *filePieceStore) HasPiece(treeID, filename string, index int64) bool {
-	_, err := os.Stat(s.piecePath(treeID, filename, index))
-	return err == nil
-}
-
-func (s *filePieceStore) MarkComplete(treeID, filename string, size int64) error {
-	dir := s.fileDir(treeID, filename)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(s.metaPath(treeID, filename), []byte(strconv.FormatInt(size, 10)), 0o644)
-}
-
-func (s *filePieceStore) IsComplete(treeID, filename string) bool {
-	_, err := os.Stat(s.metaPath(treeID, filename))
-	return err == nil
-}
-
-func (s *filePieceStore) Size(treeID, filename string) int64 {
-	data, err := os.ReadFile(s.metaPath(treeID, filename))
-	if err != nil {
-		return 0
-	}
-	n, err := strconv.ParseInt(string(data), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-func (s *filePieceStore) PieceCount(treeID, filename string) int {
-	entries, err := os.ReadDir(s.fileDir(treeID, filename))
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, e := range entries {
-		if e.Type().IsRegular() && filepath.Ext(e.Name()) == ".piece" {
-			n++
-		}
-	}
-	return n
-}
-
-func (s *filePieceStore) Delete(treeID, filename string) error {
-	return os.RemoveAll(s.fileDir(treeID, filename))
-}
-
-// Close is a no-op for the file store: it holds no long-lived handles.
-func (s *filePieceStore) Close() error { return nil }
+// NewMmapPieceStore is a deprecated alias: the unified sparse store is the
+// single implementation (the -store file|mmap flags are accepted for
+// compatibility and map here).
+func NewMmapPieceStore(dir string) (PieceStore, error) { return NewPieceStore(dir) }

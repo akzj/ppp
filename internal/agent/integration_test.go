@@ -115,7 +115,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	waitFor(t, 10*time.Second, "root has the file complete", func() bool {
-		return root.store.IsComplete("t1", "file.bin")
+		return root.store.IsComplete("file.bin")
 	})
 
 	// --- member GetPiece pulls from the root ---
@@ -133,7 +133,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	}
 	// The member cached the file (subtask full download).
 	waitFor(t, 10*time.Second, "member cached the file", func() bool {
-		return member.store.HasPiece("t1", "file.bin", 1)
+		return member.store.HasPiece("file.bin", 1)
 	})
 	// A second piece request is a local hit.
 	piece2, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
