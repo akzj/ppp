@@ -199,6 +199,17 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	waitFor(t, 5*time.Second, "member unbanned the file", func() bool {
 		return !member.banned.IsBanned("t1", "file.bin")
 	})
+	// The cancel removed the local artifacts (P2-6). Under the BUILDING
+	// semantics a root's rebuild is Job-driven (decision 1): a fresh job
+	// re-creates the artifact before the member can fetch it again.
+	if _, err := ctlClient.CreateJob(context.Background(), &pppv1.CreateJobRequest{
+		TreeId: "t1", Filename: "file.bin", Size: int64(len(content)),
+	}); err != nil {
+		t.Fatalf("CreateJob after unban: %v", err)
+	}
+	waitFor(t, 15*time.Second, "root rebuilt the file", func() bool {
+		return root.store.IsComplete("file.bin")
+	})
 	after, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)),

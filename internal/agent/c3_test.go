@@ -282,3 +282,63 @@ func TestDataServerBuildingGate(t *testing.T) {
 		t.Fatal("GetPiece after seal returned wrong data")
 	}
 }
+
+// TestDataServerRootNoArtifactGate locks the C3.5 fix: a root's FIRST GetPiece
+// (no sealed artifact AND no build in progress) returns NOT_READY with no
+// piece data and must NOT trigger a build — a root's build is Job-driven
+// (watchJobsLoop), never downstream-request-driven. After a Job-driven build
+// seals the artifact, the same GetPiece succeeds.
+func TestDataServerRootNoArtifactGate(t *testing.T) {
+	content := c3Content()
+	store, err := NewFilePieceStore(t.TempDir() + "/pieces")
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	topo := &fakeTopology{pullFromSource: true}
+	dm := NewDownloaderManager(store, NewBannedList(), topo, &fakeSource{data: content},
+		&pppv1.Source{Type: pppv1.Source_HTTP, Urls: []string{"http://fake"}}, "root", 4, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	ds := newRootDataServer("root", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second), true)
+
+	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x"}
+
+	// 1. No sealed artifact, no build -> NOT_READY, no piece data, no build.
+	resp, err := ds.GetPiece(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GetPiece: %v", err)
+	}
+	if resp.GetError().GetCode() != pppv1.Error_NOT_READY {
+		t.Fatalf("first GetPiece = %v, want NOT_READY", resp.GetError().GetCode())
+	}
+	if resp.GetPiece() != nil {
+		t.Fatal("first GetPiece returned piece data")
+	}
+	if dm.Get("t1", "a.bin") != nil || dm.IsBuilding("t1", "a.bin") {
+		t.Fatal("first GetPiece triggered a root build")
+	}
+
+	// 2. The Job-driven build (watchJobsLoop path) seals the artifact.
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && !store.IsComplete("a.bin") {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !store.IsComplete("a.bin") {
+		t.Fatal("job-driven build did not seal")
+	}
+
+	// 3. After seal, the same GetPiece succeeds.
+	resp, err = ds.GetPiece(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GetPiece after seal: %v", err)
+	}
+	if resp.GetError() != nil {
+		t.Fatalf("GetPiece after seal errored: %v", resp.GetError())
+	}
+	if !bytes.Equal(resp.GetPiece().GetData(), content[:int(PieceSize)]) {
+		t.Fatal("GetPiece after seal returned wrong data")
+	}
+}

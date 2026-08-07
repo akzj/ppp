@@ -94,13 +94,19 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	} else if !errors.Is(err, ErrPieceNotFound) {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	// BUILDING gate (decision 1, §3.4): a root that is actively building the
-	// artifact must not serve pieces and must not have a GetPiece re-trigger
-	// its build. "No artifact" (no downloader) may still trigger a build via
-	// the back-to-source path below; "building" (a running, unsealed
-	// downloader) is NOT_READY.
-	if s.root && s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
-		return errResp(pppv1.Error_NOT_READY, "artifact is building"), nil
+	// Root three-state gate (decision 1, invariant #4, §3.4/§4.3): a root's
+	// GetPiece serves only a SEALED artifact (the local hit above). While the
+	// artifact is BUILDING (a running, unsealed downloader) it is NOT_READY,
+	// and when there is no sealed artifact AND no build in progress it is also
+	// NOT_READY — a root's build is driven by the Job (watchJobsLoop), never
+	// by a downstream request, so this request is neither served nor triggers
+	// a build (the C3 gate previously leaked the no-artifact case through to
+	// the back-to-source path, starting a build and serving mid-build pieces).
+	if s.root {
+		if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
+			return errResp(pppv1.Error_NOT_READY, "artifact is building"), nil
+		}
+		return errResp(pppv1.Error_NOT_READY, "artifact is not ready"), nil
 	}
 	// Subtask back-to-source: ensure the downloader exists and wait for the
 	// piece.

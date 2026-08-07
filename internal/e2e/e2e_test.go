@@ -425,6 +425,13 @@ func TestE2ESingleRootDistribution(t *testing.T) {
 	if _, err := ctl.Unban(ctx, &pppv1.UnbanRequest{TreeId: treeID, Filename: filename}); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
+	// The cancel removed the local artifacts (P2-6). Under the BUILDING
+	// semantics a root's rebuild is Job-driven (decision 1), so a fresh job
+	// re-creates the artifact before members fetch again.
+	if _, err := ctl.CreateJob(ctx, &pppv1.CreateJobRequest{TreeId: treeID, Filename: filename, Size: int64(len(content))}); err != nil {
+		t.Fatalf("CreateJob after unban: %v", err)
+	}
+	waitForFile(t, mmapFinalPath(rootPath, treeID, filename), content, 30*time.Second)
 	waitPieceState(t, m2Data, treeID, filename, 0, int64(len(content)), pppv1.Error_ERROR_CODE_UNSPECIFIED, 30*time.Second)
 }
 
