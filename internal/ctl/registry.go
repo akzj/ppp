@@ -61,7 +61,11 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.pruneExpired()
+			// Heartbeat liveness pruning is a leader duty; followers skip it
+			// (the leader holds the topology/gen authority).
+			if s.IsLeader() {
+				s.pruneExpired()
+			}
 		}
 	}
 }

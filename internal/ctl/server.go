@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,8 +38,32 @@ type Server struct {
 	// store at startup and kept in sync on every change.
 	nodes map[string]*pppv1.Node
 
+	// leader reports whether this instance currently holds the PG lease. Nil
+	// means the server is always the leader (tests / single-instance).
+	leader func() bool
+
 	// now is injectable for tests; defaults to time.Now.
 	now func() time.Time
+}
+
+// SetLeaderProvider installs the PG lease leader probe. Without it the server
+// behaves as the leader (single-instance tests).
+func (s *Server) SetLeaderProvider(f func() bool) {
+	s.leader = f
+}
+
+// IsLeader reports whether this instance may serve leader duties.
+func (s *Server) IsLeader() bool {
+	return s.leader == nil || s.leader()
+}
+
+// requireLeader returns Unavailable when a follower receives a leader-only
+// call (an LB should route only to the leader).
+func (s *Server) requireLeader() error {
+	if !s.IsLeader() {
+		return status.Error(codes.Unavailable, "ctl: not the leader")
+	}
+	return nil
 }
 
 // NewServer creates a control-plane server over the given store.
@@ -91,18 +117,30 @@ func Run(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-// ServeControl opens the store from cfg.DBPath, starts a Control server and
-// serves gRPC on lis. On ctx cancellation it shuts the server down (bounded
-// graceful, forced Stop if active streams hang) and closes the store; the
-// returned done channel closes when cleanup finishes. Tests stop the returned
-// grpc.Server explicitly and may cancel ctx to release resources.
+// ServeControl opens the PostgreSQL store, starts a Control server with PG
+// lease leader election and serves gRPC on lis plus the /leader health check
+// on cfg.HTTPAddr. On ctx cancellation it shuts the server down (bounded
+// graceful, forced Stop if active streams hang), stops the elector and closes
+// the store; the returned done channel closes when cleanup finishes. Tests
+// stop the returned grpc.Server explicitly and may cancel ctx to release
+// resources.
 func ServeControl(ctx context.Context, cfg *Config, lis net.Listener) (gs *grpc.Server, done <-chan struct{}, err error) {
-	st, err := OpenStore(cfg.DBPath)
+	st, err := OpenPGStore(ctx, cfg.PGDSN)
 	if err != nil {
 		return nil, nil, err
 	}
 	srv := NewServer(st, cfg)
+	leader := NewLeaderElector(st.Pool(), cfg.InstanceID, cfg.LeaderLease, cfg.LeaderRenew)
+	go leader.Run(ctx)
+	srv.SetLeaderProvider(leader.IsLeader)
+	// Wait (bounded) for the initial election so callers/tests do not race the
+	// first mutation against the elector's first acquisition. A follower (the
+	// lease is held by another instance) simply times out here.
+	for i := 0; i < 100 && !leader.IsLeader() && ctx.Err() == nil; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err := srv.Start(ctx); err != nil {
+		leader.Stop()
 		st.Close()
 		return nil, nil, err
 	}
@@ -113,12 +151,44 @@ func ServeControl(ctx context.Context, cfg *Config, lis net.Listener) (gs *grpc.
 		defer close(doneCh)
 		<-ctx.Done()
 		shutdownGRPC(gs)
+		if leader != nil {
+			leader.Stop()
+		}
 		st.Close()
 	}()
 	go func() {
 		_ = gs.Serve(lis)
 	}()
+	go serveLeaderHTTP(ctx, cfg.HTTPAddr, srv.IsLeader)
 	return gs, doneCh, nil
+}
+
+// serveLeaderHTTP exposes the /leader health endpoint (200 when this instance
+// is the leader, 503 otherwise) for an LB/VIP to route only to the leader.
+func serveLeaderHTTP(ctx context.Context, addr string, isLeader func() bool) {
+	if addr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/leader", func(w http.ResponseWriter, _ *http.Request) {
+		if isLeader() {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("leader\n"))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("not leader\n"))
+	})
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("ctl: /leader http: %v", err)
+	}
 }
 
 // shutdownGRPC stops the server. GracefulStop is attempted first so in-flight
@@ -202,6 +272,10 @@ func (s *Server) refreshTopologyLocked(tree *pppv1.Tree) (*pppv1.Topology, int64
 // ============ Tree lifecycle ============
 
 func (s *Server) CreateTree(_ context.Context, req *pppv1.CreateTreeRequest) (*pppv1.CreateTreeResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	t := req.GetTree()
 	if t == nil || t.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tree id is required")
@@ -245,6 +319,10 @@ func (s *Server) ListTrees(context.Context, *pppv1.ListTreesRequest) (*pppv1.Lis
 }
 
 func (s *Server) DeleteTree(_ context.Context, req *pppv1.DeleteTreeRequest) (*pppv1.DeleteTreeResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	if req.GetTreeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tree_id is required")
 	}
@@ -273,6 +351,10 @@ func (s *Server) DeleteTree(_ context.Context, req *pppv1.DeleteTreeRequest) (*p
 // ============ Node onboarding ============
 
 func (s *Server) RegisterNode(_ context.Context, req *pppv1.RegisterNodeRequest) (*pppv1.RegisterNodeResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	node := req.GetNode()
 	if node == nil || node.GetId() == "" || node.GetAddr() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node id and addr are required")
@@ -342,6 +424,10 @@ func (s *Server) RegisterNode(_ context.Context, req *pppv1.RegisterNodeRequest)
 }
 
 func (s *Server) Heartbeat(_ context.Context, req *pppv1.HeartbeatRequest) (*pppv1.HeartbeatResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	node := req.GetNode()
 	if node == nil || node.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node id is required")
@@ -372,6 +458,10 @@ func (s *Server) Heartbeat(_ context.Context, req *pppv1.HeartbeatRequest) (*ppp
 }
 
 func (s *Server) WatchTopology(req *pppv1.WatchTopologyRequest, stream pppv1.Control_WatchTopologyServer) error {
+	if err := s.requireLeader(); err != nil {
+		return err
+	}
+
 	if req.GetTreeId() == "" {
 		return status.Error(codes.InvalidArgument, "tree_id is required")
 	}
@@ -416,6 +506,10 @@ func (s *Server) WatchTopology(req *pppv1.WatchTopologyRequest, stream pppv1.Con
 }
 
 func (s *Server) WatchBannedList(req *pppv1.WatchBannedListRequest, stream pppv1.Control_WatchBannedListServer) error {
+	if err := s.requireLeader(); err != nil {
+		return err
+	}
+
 	if req.GetTreeId() == "" {
 		return status.Error(codes.InvalidArgument, "tree_id is required")
 	}
@@ -483,6 +577,10 @@ func validFilename(name string) bool {
 }
 
 func (s *Server) CreateJob(_ context.Context, req *pppv1.CreateJobRequest) (*pppv1.CreateJobResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	if req.GetTreeId() == "" || req.GetFilename() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tree_id and filename are required")
 	}
@@ -561,6 +659,10 @@ func (s *Server) QueryJob(_ context.Context, req *pppv1.QueryJobRequest) (*pppv1
 }
 
 func (s *Server) CancelJob(_ context.Context, req *pppv1.CancelJobRequest) (*pppv1.CancelJobResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	// Resolve (tree_id, filename): a center job_id identifies them; otherwise
 	// the caller must supply both.
 	var treeID, filename string
@@ -642,6 +744,10 @@ func (s *Server) CancelJob(_ context.Context, req *pppv1.CancelJobRequest) (*ppp
 }
 
 func (s *Server) Unban(_ context.Context, req *pppv1.UnbanRequest) (*pppv1.UnbanResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+
 	if req.GetTreeId() == "" || req.GetFilename() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tree_id and filename are required")
 	}
@@ -713,11 +819,35 @@ func (s *Server) ListJobs(_ context.Context, req *pppv1.ListJobsRequest) (*pppv1
 }
 
 func (s *Server) WatchJobs(req *pppv1.WatchJobsRequest, stream pppv1.Control_WatchJobsServer) error {
+	if err := s.requireLeader(); err != nil {
+		return err
+	}
+
 	if req.GetTreeId() == "" {
 		return status.Error(codes.InvalidArgument, "tree_id is required")
 	}
 	ch := s.fanout.subscribeJobs(req.GetTreeId())
 	defer s.fanout.unsubscribeJobs(req.GetTreeId(), ch)
+
+	// delivered tracks job ids already pushed as active (Removed=false), so a
+	// job created concurrently between subscribe and the replay is delivered
+	// exactly once (the live push and the replay can both carry it). Removed
+	// (cancel) updates always pass and clear the mark.
+	delivered := make(map[string]struct{})
+	send := func(up *pppv1.JobUpdate) error {
+		if up == nil || up.GetJob() == nil {
+			return nil
+		}
+		if !up.GetRemoved() {
+			if _, ok := delivered[up.GetJob().GetId()]; ok {
+				return nil // duplicate active push (replay + live)
+			}
+			delivered[up.GetJob().GetId()] = struct{}{}
+		} else {
+			delete(delivered, up.GetJob().GetId())
+		}
+		return stream.Send(up)
+	}
 
 	// Replay every active (CREATED/DISTRIBUTING) job on subscribe so a root
 	// that connects late does not miss an assignment. No wall-clock cursor is
@@ -733,7 +863,7 @@ func (s *Server) WatchJobs(req *pppv1.WatchJobsRequest, stream pppv1.Control_Wat
 		if j.GetState() != pppv1.Job_CREATED && j.GetState() != pppv1.Job_DISTRIBUTING {
 			continue
 		}
-		if err := stream.Send(&pppv1.JobUpdate{Job: j, Removed: false}); err != nil {
+		if err := send(&pppv1.JobUpdate{Job: j, Removed: false}); err != nil {
 			return err
 		}
 	}
@@ -744,7 +874,7 @@ func (s *Server) WatchJobs(req *pppv1.WatchJobsRequest, stream pppv1.Control_Wat
 			if up == nil {
 				return nil // tree deleted; fanout closed the stream
 			}
-			if err := stream.Send(up); err != nil {
+			if err := send(up); err != nil {
 				return err
 			}
 		case <-stream.Context().Done():
