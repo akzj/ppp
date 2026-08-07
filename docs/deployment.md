@@ -228,6 +228,18 @@ Run the ctl with `-tls-ca ca.pem -tls-cert ctl.pem -tls-key ctl.key`; run each s
 `-tls-ca ca.pem -tls-cert node.pem -tls-key node.key -tls-server-name localhost`; orchestrator
 clients connect with the CA + their client cert and verify `localhost`.
 
+**`-tls-server-name` ops note (P2):** the single flag constrains **both** the ctl client and the
+peer client's server-certificate SANs. An **empty** value does **not** disable verification — gRPC
+then verifies the **dialed address's hostname**. Since this system normally dials by IP
+(`addr` is `IP:port`), the two sensible configurations are:
+
+- **Leave `-tls-server-name` empty** and put the dialed IPs in the server certificates as IP SANs
+  (e.g. `subjectAltName=IP:127.0.0.1`), or
+- **Give every server the same DNS name** (e.g. `subjectAltName=DNS:ppp.internal`) and set
+  `-tls-server-name ppp.internal` on every client.
+
+A cert that matches neither the configured name nor the dialed IP is rejected.
+
 ## Memory and CI notes
 
 - The test suite is green with `go test ./...` and

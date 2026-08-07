@@ -54,7 +54,9 @@ type Config struct {
 	TLSCert string
 	TLSKey  string
 	// TLSServerName is the name the client verifies on the server certificate
-	// (ctl + peers); empty disables the hostname check.
+	// (ctl + peers). It does NOT disable verification when empty: gRPC then
+	// verifies the DIALED address's hostname (so IP dialing requires the
+	// server certificate to contain the dialed IP as a SAN).
 	TLSServerName string
 
 	role string // parsed from flags, converted by Finalize

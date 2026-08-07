@@ -94,7 +94,7 @@ func TestLoadCredentialsHandshake(t *testing.T) {
 		_, _, err := serverCreds.ServerHandshake(serverSide)
 		done <- err
 	}()
-	if _, _, err := clientCreds.ClientHandshake(context.Background(), "localhost", clientSide); err != nil {
+	if _, _, err := clientCreds.ClientHandshake(context.Background(), "127.0.0.1", clientSide); err != nil {
 		t.Fatalf("client handshake: %v", err)
 	}
 	if err := <-done; err != nil {
@@ -104,7 +104,7 @@ func TestLoadCredentialsHandshake(t *testing.T) {
 
 // handshakePair runs a server and a client handshake over a real TCP
 // connection (net.Pipe is synchronous and can deadlock a rejected handshake).
-func handshakePair(t *testing.T, serverCreds, clientCreds credentials.TransportCredentials, serverName string) (serverErr, clientErr error) {
+func handshakePair(t *testing.T, serverCreds, clientCreds credentials.TransportCredentials) (serverErr, clientErr error) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -127,7 +127,10 @@ func handshakePair(t *testing.T, serverCreds, clientCreds credentials.TransportC
 		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
-	_, _, clientErr = clientCreds.ClientHandshake(context.Background(), serverName, conn)
+	// Pass the DIALED host as the authority, exactly like gRPC does; the
+	// client creds' tls.Config.ServerName (when non-empty) overrides it.
+	dialHost := "127.0.0.1"
+	_, _, clientErr = clientCreds.ClientHandshake(context.Background(), dialHost, conn)
 	serverErr = <-serverDone
 	return serverErr, clientErr
 }
@@ -153,9 +156,51 @@ func TestLoadCredentialsRejectsCertlessClient(t *testing.T) {
 		ServerName: "localhost",
 		MinVersion: tls.VersionTLS12,
 	})
-	serverErr, _ := handshakePair(t, serverCreds, certless, "localhost")
+	serverErr, _ := handshakePair(t, serverCreds, certless)
 	if serverErr == nil {
 		t.Fatal("server accepted a certless client")
+	}
+}
+
+// TestLoadClientCredentialsEmptyServerName locks the empty-serverName
+// behavior: it does NOT disable hostname verification — gRPC verifies the
+// DIALED address's hostname (so IP dialing requires the server certificate to
+// contain the dialed IP as a SAN; a DNS-only cert is rejected).
+func TestLoadClientCredentialsEmptyServerName(t *testing.T) {
+	ca, caKey, _, err := GenerateTestCA()
+	if err != nil {
+		t.Fatalf("GenerateTestCA: %v", err)
+	}
+	caFile := writeTempPEM(t, "ca.pem", caPEM(ca))
+	clientCert, clientKey := mustCert(t, ca, caKey, "ppp-client", nil, nil, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	clientCreds, err := LoadClientCredentials(caFile, writeTempPEM(t, "client.pem", clientCert), writeTempPEM(t, "client.key", clientKey), "")
+	if err != nil {
+		t.Fatalf("LoadClientCredentials: %v", err)
+	}
+
+	// Case A: a DNS-only server cert (no IP SAN) dialed by 127.0.0.1 with an
+	// empty serverName -> the dialed host is verified and NOT covered -> the
+	// client rejects.
+	dnsOnlyCert, dnsOnlyKey := mustCert(t, ca, caKey, "ppp-server", []string{"localhost"}, nil, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	dnsOnlyCreds, err := LoadServerCredentials(caFile, writeTempPEM(t, "dns.pem", dnsOnlyCert), writeTempPEM(t, "dns.key", dnsOnlyKey))
+	if err != nil {
+		t.Fatalf("LoadServerCredentials(dns): %v", err)
+	}
+	_, clientErr := handshakePair(t, dnsOnlyCreds, clientCreds)
+	if clientErr == nil {
+		t.Fatal("client accepted a DNS-only server cert for an IP dial with empty serverName")
+	}
+
+	// Case B: a server cert that includes the dialed IP SAN is accepted with
+	// an empty serverName.
+	ipCert, ipKey := mustCert(t, ca, caKey, "ppp-server", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	ipCreds, err := LoadServerCredentials(caFile, writeTempPEM(t, "ip.pem", ipCert), writeTempPEM(t, "ip.key", ipKey))
+	if err != nil {
+		t.Fatalf("LoadServerCredentials(ip): %v", err)
+	}
+	serverErr, clientErr := handshakePair(t, ipCreds, clientCreds)
+	if clientErr != nil || serverErr != nil {
+		t.Fatalf("IP-SAN handshake with empty serverName failed: client=%v server=%v", clientErr, serverErr)
 	}
 }
 
