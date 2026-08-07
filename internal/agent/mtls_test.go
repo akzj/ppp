@@ -179,7 +179,7 @@ func TestAgentMTLSDistribution(t *testing.T) {
 	dataClient := pppv1.NewDataClient(dataConn)
 	waitFor(t, 30*time.Second, "member fetched the file from the root over mTLS", func() bool {
 		resp, err := dataClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
-			Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job",
+			Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job", MetadataId: testMetaID(),
 		})
 		if err != nil {
 			return false
@@ -198,7 +198,7 @@ func TestAgentMTLSDistribution(t *testing.T) {
 	defer certlessConn.Close()
 	certlessClient := pppv1.NewDataClient(certlessConn)
 	_, err = certlessClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
-		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job",
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job", MetadataId: testMetaID(),
 	})
 	if err == nil {
 		t.Fatal("certless client was not rejected by the TLS Data server")

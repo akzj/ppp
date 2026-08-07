@@ -253,7 +253,7 @@ func TestDataServerBuildingGate(t *testing.T) {
 		t.Fatal("build did not enter the BUILDING state")
 	}
 
-	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x"}
+	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x", MetadataId: testMetaID()}
 	resp, err := ds.GetPiece(context.Background(), req)
 	if err != nil {
 		t.Fatalf("GetPiece: %v", err)
@@ -262,7 +262,9 @@ func TestDataServerBuildingGate(t *testing.T) {
 		t.Fatalf("GetPiece during build = %v, want NOT_READY", resp.GetError().GetCode())
 	}
 
-	// Release the source; the build completes and the same GetPiece succeeds.
+	// Release the source; the build completes and the same GetPiece succeeds
+	// (with the sealed artifact's real metadata_id — C4 serves only matching
+	// ids).
 	src.unblock()
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) && !store.IsComplete("a.bin") {
@@ -271,6 +273,11 @@ func TestDataServerBuildingGate(t *testing.T) {
 	if !store.IsComplete("a.bin") {
 		t.Fatal("build did not seal after the source released")
 	}
+	meta, _, err := store.ReadMetadata("a.bin")
+	if err != nil {
+		t.Fatalf("ReadMetadata: %v", err)
+	}
+	req.MetadataId = MetadataID(meta)
 	resp, err = ds.GetPiece(context.Background(), req)
 	if err != nil {
 		t.Fatalf("GetPiece after seal: %v", err)
@@ -301,7 +308,7 @@ func TestDataServerRootNoArtifactGate(t *testing.T) {
 	t.Cleanup(dm.Close)
 	ds := newRootDataServer("root", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second), true)
 
-	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x"}
+	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x", MetadataId: testMetaID()}
 
 	// 1. No sealed artifact, no build -> NOT_READY, no piece data, no build.
 	resp, err := ds.GetPiece(context.Background(), req)
@@ -330,7 +337,12 @@ func TestDataServerRootNoArtifactGate(t *testing.T) {
 		t.Fatal("job-driven build did not seal")
 	}
 
-	// 3. After seal, the same GetPiece succeeds.
+	// 3. After seal, the same GetPiece succeeds (with the real metadata_id).
+	meta, _, err := store.ReadMetadata("a.bin")
+	if err != nil {
+		t.Fatalf("ReadMetadata: %v", err)
+	}
+	req.MetadataId = MetadataID(meta)
 	resp, err = ds.GetPiece(context.Background(), req)
 	if err != nil {
 		t.Fatalf("GetPiece after seal: %v", err)

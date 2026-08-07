@@ -78,6 +78,10 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	if req.GetSize() <= 0 || req.GetIndex() < 0 || req.GetIndex()*PieceSize >= req.GetSize() {
 		return errResp(pppv1.Error_BAD_REQUEST, "invalid piece index or file size"), nil
 	}
+	// C4 (§5.1): every request is bound to the validated metadata_id.
+	if len(req.GetMetadataId()) == 0 {
+		return errResp(pppv1.Error_BAD_REQUEST, "metadata_id is required"), nil
+	}
 	// Loop prevention: a request whose hop chain already contains this node
 	// has come back around.
 	for _, hop := range req.GetFrom() {
@@ -89,8 +93,13 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
 		return errResp(pppv1.Error_BANNED, "file is banned"), nil
 	}
-	// Local hit.
+	// Local hit: a sealed artifact is served only when the request's
+	// metadata_id matches its own; a mismatch is CONTENT_CONFLICT (§5.1) —
+	// never serve one artifact under another artifact's identity.
 	if data, err := s.store.Get(key.GetFilename(), req.GetIndex()); err == nil {
+		if meta, ok, _ := s.store.ReadMetadata(key.GetFilename()); ok && !bytes.Equal(req.GetMetadataId(), MetadataID(meta)) {
+			return errResp(pppv1.Error_CONTENT_CONFLICT, "content conflict: metadata_id mismatch"), nil
+		}
 		return s.pieceResponse(key, req.GetIndex(), data), nil
 	} else if !errors.Is(err, ErrPieceNotFound) {
 		return nil, status.Error(codes.Internal, err.Error())

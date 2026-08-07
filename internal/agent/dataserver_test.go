@@ -55,7 +55,8 @@ func TestDataServerLoopDetection(t *testing.T) {
 	resp, err := ds.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"},
 		Index: 0, Size: 100,
-		From: []*pppv1.Hop{{NodeId: "me", JobId: "job:1"}},
+		From:       []*pppv1.Hop{{NodeId: "me", JobId: "job:1"}},
+		MetadataId: testMetaID(),
 	})
 	if err != nil {
 		t.Fatalf("GetPiece: %v", err)
@@ -78,7 +79,7 @@ func TestDataServerBannedGate(t *testing.T) {
 
 	// GetPiece -> BANNED.
 	resp, err := ds.GetPiece(context.Background(), &pppv1.GetPieceRequest{
-		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: 100,
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: 100, MetadataId: testMetaID(),
 	})
 	if err != nil {
 		t.Fatalf("GetPiece: %v", err)
@@ -214,4 +215,26 @@ func TestDataServerResolvePath(t *testing.T) {
 			t.Fatalf("ResolvePath(%v) = nil error, want rejection", key)
 		}
 	}
+}
+
+// testMetaID returns a fixed metadata_id for tests that only need a
+// non-empty value (the NOT_READY/banned/no-artifact paths don't compare it).
+func testMetaID() []byte {
+	return bytes.Repeat([]byte{0xAB}, MetadataDigestSize)
+}
+
+// mustGetMetadataID fetches a client's sealed artifact metadata_id (C4).
+func mustGetMetadataID(t *testing.T, client pppv1.DataClient, treeID, filename string) []byte {
+	t.Helper()
+	resp, err := client.GetFileInfo(context.Background(), &pppv1.GetFileInfoRequest{
+		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+	})
+	if err != nil {
+		t.Fatalf("GetFileInfo(%s/%s): %v", treeID, filename, err)
+	}
+	info := resp.GetInfo()
+	if info == nil {
+		t.Fatalf("GetFileInfo(%s/%s): %v", treeID, filename, resp.GetError())
+	}
+	return info.GetMetadataId()
 }

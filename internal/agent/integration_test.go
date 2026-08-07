@@ -148,6 +148,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	piece, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)), JobId: "local:test",
+		MetadataId: testMetaID(), // the member has no artifact yet: the back-to-source binds the real id
 	})
 	if err != nil {
 		t.Fatalf("member GetPiece: %v", err)
@@ -160,10 +161,12 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	waitFor(t, 10*time.Second, "member cached the file", func() bool {
 		return member.store.HasPiece("file.bin", 1)
 	})
-	// A second piece request is a local hit.
+	// A second piece request is a local hit (C4 serves only a matching
+	// metadata_id, so the caller first fetches the artifact's id).
 	piece2, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 1, Size: int64(len(content)),
+		MetadataId: mustGetMetadataID(t, memberClient, "t1", "file.bin"),
 	})
 	if err != nil {
 		t.Fatalf("member GetPiece(1): %v", err)
@@ -184,6 +187,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	banned, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)),
+		MetadataId: testMetaID(),
 	})
 	if err != nil {
 		t.Fatalf("GetPiece after ban: %v", err)
@@ -213,6 +217,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	after, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)),
+		MetadataId: testMetaID(), // the member rebuilds from the root (no artifact yet)
 	})
 	if err != nil {
 		t.Fatalf("GetPiece after unban: %v", err)

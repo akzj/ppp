@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash/crc64"
+	"io"
 	"sync"
 	"time"
 
@@ -47,6 +49,16 @@ var (
 	// errPieceFailed is an internal sentinel when a piece could not be fetched
 	// after all attempts (non-terminal; waiters time out on their own ctx).
 	errPieceFailed = errors.New("agent: piece fetch failed")
+	// errPieceDigestMismatch marks a piece whose SHA-256 does not match the
+	// bound metadata's expected digest (C4): the piece is discarded and the
+	// upstream is considered faulty.
+	errPieceDigestMismatch = errors.New("agent: piece digest mismatch")
+	// errContentConflict marks an upstream whose metadata_id differs from the
+	// bound metadata: it must never be mixed with the current content (§5.3).
+	errContentConflict = errors.New("agent: content conflict")
+	// errMetadataCorrupt marks copied metadata whose bytes failed validation
+	// (metadata_id mismatch or decode error): the upstream is faulty.
+	errMetadataCorrupt = errors.New("agent: metadata corrupt")
 )
 
 // crcTable is the ECMA crc64 table used for piece hashes.
@@ -106,10 +118,20 @@ type Downloader struct {
 	// the basis of the self-built FileMetadataV1. C4 replaces the self-build
 	// with the upstream-copied metadata (same content, same metadata_id).
 	pieceHashes [][]byte
-	fileErr     error
-	complete    bool
-	running     bool
-	wakeCh      chan struct{}
+	// meta is the bound authoritative metadata (C4): non-root downloaders
+	// copy it from an upstream before fetching pieces; the root self-builds
+	// at Seal time. metaBytes is the exact canonical bytes used for Seal and
+	// metaID = SHA-256(metaBytes).
+	meta      *FileMetadataV1
+	metaBytes []byte
+	metaID    []byte
+	// bindAttempted marks a root that decided to self-build (no upstream
+	// sealed): the run loop must not re-bind it every iteration.
+	bindAttempted bool
+	fileErr       error
+	complete      bool
+	running       bool
+	wakeCh        chan struct{}
 	// need counts active holders of this file (child subscribers + active
 	// piece waiters); jobNeed marks a root job-driven download. When need
 	// reaches zero and the file is not complete the downloader stops and is
@@ -406,6 +428,29 @@ func (d *Downloader) run() {
 			d.mu.Unlock()
 			break
 		}
+		// C4 (§5.2a/d): bind the authoritative metadata before the first
+		// dispatch. A non-root (or a root with root upstreams — the failover
+		// sealed-check) copies it from an upstream; a root that self-builds
+		// (no sealed sibling) marks bindAttempted and proceeds (C2/C3).
+		if d.meta == nil && !d.bindAttempted {
+			d.mu.Unlock()
+			if err := d.bindMetadata(); err != nil {
+				if errors.Is(err, errFileBanned) {
+					d.fail(errFileBanned)
+					return
+				}
+				// No usable upstream: wait for the topology to change or a
+				// caller to retry.
+				select {
+				case <-time.After(noUpstreamRetry):
+				case <-d.wakeCh:
+				case <-d.ctx.Done():
+					return
+				}
+				continue
+			}
+			continue
+		}
 		index := d.nextMissingLocked()
 		if index < 0 {
 			d.mu.Unlock()
@@ -466,6 +511,151 @@ func (d *Downloader) nextMissingLocked() int64 {
 	return -1
 }
 
+// bindMetadata acquires the authoritative metadata (§5.2a/d). A non-root
+// downloader (and a root with root upstreams — the failover sealed-check,
+// §4.4) copies it from an upstream BEFORE fetching pieces: GetFileInfo ->
+// GetMetadata stream -> verify metadata_id == SHA-256(bytes) -> bind. The
+// primary root (PullFromSource with no upstreams) self-builds at Seal time
+// (C2/C3) and returns nil without binding.
+func (d *Downloader) bindMetadata() error {
+	d.mu.Lock()
+	if d.meta != nil {
+		d.mu.Unlock()
+		return nil
+	}
+	pullFromSource := d.topo.PullFromSource()
+	upstreams := d.topo.UpstreamAddrs()
+	d.mu.Unlock()
+	if len(upstreams) == 0 {
+		if pullFromSource {
+			d.mu.Lock()
+			d.bindAttempted = true
+			d.mu.Unlock()
+			return nil // primary root: self-build at Seal
+		}
+		return errNoUpstream
+	}
+	var lastErr error = errNoUpstream
+	for _, addr := range upstreams {
+		meta, metaBytes, size, err := d.fetchMetadataFrom(addr)
+		if err != nil {
+			if errors.Is(err, errFileBanned) {
+				return err
+			}
+			lastErr = err
+			continue // try the next upstream
+		}
+		d.mu.Lock()
+		d.meta = meta
+		d.metaBytes = metaBytes
+		d.metaID = MetadataID(metaBytes)
+		d.size = size
+		d.numPieces = (size + PieceSize - 1) / PieceSize
+		d.pieceHashes = make([][]byte, d.numPieces)
+		d.mu.Unlock()
+		return nil
+	}
+	// No upstream has a sealed artifact. A root (the failover case) then
+	// builds from the source (self-build); a non-root waits for an upstream.
+	if pullFromSource {
+		d.mu.Lock()
+		d.bindAttempted = true
+		d.mu.Unlock()
+		return nil
+	}
+	return lastErr
+}
+
+// fetchMetadataFrom copies the sealed metadata from one upstream and verifies
+// it (§5.2a/d): GetFileInfo -> GetMetadata stream -> metadata_id ==
+// SHA-256(bytes) -> decode + cross-check the file size.
+func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, int64, error) {
+	client, err := d.peers.client(addr)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	callCtx, cancel := context.WithTimeout(d.ctx, pieceFetchTimeout)
+	defer cancel()
+	key := &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename}
+	infoResp, err := client.GetFileInfo(callCtx, &pppv1.GetFileInfoRequest{Key: key})
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	info, err := fileInfoFromResponse(infoResp)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if len(info.GetMetadataId()) != MetadataDigestSize {
+		return nil, nil, 0, fmt.Errorf("%w: upstream returned a bad metadata_id", errMetadataCorrupt)
+	}
+	stream, err := client.GetMetadata(callCtx, &pppv1.GetMetadataRequest{Key: key, MetadataId: info.GetMetadataId()})
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	var buf []byte
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		buf = append(buf, chunk.GetData()...)
+	}
+	if !bytes.Equal(MetadataID(buf), info.GetMetadataId()) {
+		return nil, nil, 0, fmt.Errorf("%w: metadata_id mismatch after copy", errMetadataCorrupt)
+	}
+	meta, err := DecodeMetadata(buf)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("%w: %v", errMetadataCorrupt, err)
+	}
+	if meta.FileSize != info.GetFileSize() {
+		return nil, nil, 0, fmt.Errorf("%w: file size %d != info %d", errMetadataCorrupt, meta.FileSize, info.GetFileSize())
+	}
+	return meta, buf, info.GetFileSize(), nil
+}
+
+// fileInfoFromResponse extracts the FileInfo from a GetFileInfoResponse,
+// mapping the error codes (BANNED -> errFileBanned, CONTENT_CONFLICT ->
+// errContentConflict, etc).
+func fileInfoFromResponse(resp *pppv1.GetFileInfoResponse) (*pppv1.FileInfo, error) {
+	switch r := resp.GetResult().(type) {
+	case *pppv1.GetFileInfoResponse_Info:
+		if r.Info == nil {
+			return nil, errors.New("agent: empty file info")
+		}
+		return r.Info, nil
+	case *pppv1.GetFileInfoResponse_Error:
+		return nil, mapPeerError(r.Error)
+	}
+	return nil, errors.New("agent: empty file info response")
+}
+
+// verifyPieceDigest checks a fetched piece against the bound metadata's
+// expected SHA-256 (§5.2e / §5.1): a mismatch is a PIECE_DIGEST_MISMATCH —
+// the piece is discarded and the upstream is treated as faulty (the fetch
+// retries against another upstream). CRC64 remains the transport fast-check;
+// the metadata digest is the content identity. A root with no bound metadata
+// (self-build) has no expected digests yet and returns nil.
+func (d *Downloader) verifyPieceDigest(index int64, data []byte) error {
+	d.mu.Lock()
+	meta := d.meta
+	d.mu.Unlock()
+	if meta == nil {
+		return nil
+	}
+	want, err := meta.PieceDigest(int(index))
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(data)
+	if !bytes.Equal(got[:], want) {
+		return fmt.Errorf("%w: piece %d", errPieceDigestMismatch, index)
+	}
+	return nil
+}
+
 // checkCompleteLocked marks the file complete when every piece is stored and
 // atomically publishes it: the per-piece SHA-256 digests (accumulated while
 // fetching; read back for resumed pieces) are assembled into a FileMetadataV1
@@ -496,6 +686,13 @@ func (d *Downloader) checkCompleteLocked() {
 // sealAndPublishLocked builds the FileMetadataV1 from the stored pieces and
 // atomically publishes the artifact. Call with d.mu held.
 func (d *Downloader) sealAndPublishLocked() error {
+	// C4 (§5.2f): a downloader with bound (upstream-copied) metadata
+	// publishes those exact bytes — the artifact identity is the copied
+	// metadata, never a locally regenerated one. The root (no bound
+	// metadata) self-builds below (C2/C3).
+	if d.metaBytes != nil {
+		return d.store.Seal(d.filename, d.size, d.metaBytes)
+	}
 	pieceCount := int(d.numPieces)
 	digests := make([][]byte, pieceCount)
 	fileHash := sha256.New()
@@ -568,6 +765,12 @@ func (d *Downloader) fetchPiece(index int64) {
 			if int64(len(data)) != want {
 				err = fmt.Errorf("agent: piece %d length %d != expected %d (source changed?)", index, len(data), want)
 			}
+		}
+		if err == nil {
+			// C4 (§5.2e): verify the piece SHA-256 against the bound
+			// metadata's expected digest. A mismatch discards the piece and
+			// marks the upstream faulty (the next attempt switches).
+			err = d.verifyPieceDigest(index, data)
 		}
 		if err == nil {
 			break
@@ -764,6 +967,10 @@ func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
 		Size:  d.size,
 		JobId: d.jobID,
 		From:  from,
+		// C4 (§5.1): the request is bound to the validated metadata; an
+		// upstream whose artifact differs returns CONTENT_CONFLICT and is
+		// never mixed with the current content.
+		MetadataId: d.metaID,
 	})
 	if err != nil {
 		return nil, err
@@ -794,6 +1001,12 @@ func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
 func mapPeerError(e *pppv1.Error) error {
 	if e.GetCode() == pppv1.Error_BANNED {
 		return errFileBanned
+	}
+	if e.GetCode() == pppv1.Error_CONTENT_CONFLICT {
+		return errContentConflict
+	}
+	if e.GetCode() == pppv1.Error_PIECE_DIGEST_MISMATCH {
+		return errPieceDigestMismatch
 	}
 	return fmt.Errorf("agent: peer error %s: %s", e.GetCode(), e.GetMessage())
 }

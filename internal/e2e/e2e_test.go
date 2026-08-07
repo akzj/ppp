@@ -274,12 +274,26 @@ func waitTopologyUpstream(t *testing.T, ctl pppv1.ControlClient, nodeID, wantUps
 	}
 }
 
+// e2eFixedMetaID is used when no sealed artifact exists yet (the back-to-source
+// path does not compare it; the BANNED/NOT_READY gates only need non-empty).
+var e2eFixedMetaID = bytes.Repeat([]byte{0xCD}, 32)
+
+// getPiece first asks the server for the sealed artifact's metadata_id (C4)
+// and binds the request to it; before the artifact is sealed the fixed value
+// is used (the back-to-source path binds the real id itself).
 func getPiece(ctx context.Context, data pppv1.DataClient, treeID, filename string, index, size int64) (*pppv1.GetPieceResponse, error) {
+	metaID := e2eFixedMetaID
+	if resp, err := data.GetFileInfo(ctx, &pppv1.GetFileInfoRequest{
+		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+	}); err == nil && resp.GetInfo() != nil {
+		metaID = resp.GetInfo().GetMetadataId()
+	}
 	return data.GetPiece(ctx, &pppv1.GetPieceRequest{
-		Key:   &pppv1.TreeKey{TreeId: treeID, Filename: filename},
-		Index: index,
-		Size:  size,
-		JobId: "e2e:job",
+		Key:        &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+		Index:      index,
+		Size:       size,
+		JobId:      "e2e:job",
+		MetadataId: metaID,
 	})
 }
 

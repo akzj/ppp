@@ -223,6 +223,7 @@ func TestThreeNodeChainStopPropagation(t *testing.T) {
 	if _, err := parentClient.GetPiece(ctx, &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)), JobId: "job:1",
+		MetadataId: testMetaID(), // the parent has no artifact yet: back-to-source
 	}); err != nil {
 		t.Fatalf("child GetPiece: %v", err)
 	}

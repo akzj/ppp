@@ -138,7 +138,7 @@ func TestE2EMTLS(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := dataClient.GetPiece(ctx, &pppv1.GetPieceRequest{
-			Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls",
+			Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls", MetadataId: e2eFixedMetaID,
 		})
 		if err == nil && resp.GetError().GetCode() == pppv1.Error_ERROR_CODE_UNSPECIFIED {
 			break
@@ -154,7 +154,7 @@ func TestE2EMTLS(t *testing.T) {
 	}
 	defer certlessConn.Close()
 	if _, err := pppv1.NewDataClient(certlessConn).GetPiece(ctx, &pppv1.GetPieceRequest{
-		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls",
+		Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls", MetadataId: e2eFixedMetaID,
 	}); err == nil {
 		t.Fatal("certless client was not rejected by the TLS Data server")
 	}

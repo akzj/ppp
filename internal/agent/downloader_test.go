@@ -16,6 +16,8 @@ import (
 
 	pppv1 "github.com/akzj/ppp/gen/ppp/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // fakeTopology is a topologyProvider stub.
@@ -41,6 +43,89 @@ type fakeDataServer struct {
 	unsubscribes  int
 	release       chan struct{} // when set, GetPiece blocks until released or ctx done
 	lastFrom      []*pppv1.Hop
+}
+
+// buildMetadata assembles the canonical metadata from the stored pieces and
+// returns its bytes + FileInfo (C4). The fake's artifact identity is derived
+// deterministically from its content, exactly like a real sealed artifact.
+func (f *fakeDataServer) buildMetadata(treeID, filename string) ([]byte, *pppv1.FileInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var digests [][]byte
+	var size int64
+	fileHash := sha256.New()
+	for i := 0; ; i++ {
+		key := treeID + "\x00" + filename + "\x00" + strconv.Itoa(i)
+		data, ok := f.pieces[key]
+		if !ok {
+			break
+		}
+		h := sha256.Sum256(data)
+		digests = append(digests, h[:])
+		fileHash.Write(data)
+		size += int64(len(data))
+	}
+	if len(digests) == 0 {
+		return nil, nil, fmt.Errorf("fake: no pieces for %s/%s", treeID, filename)
+	}
+	m, err := BuildMetadata(filename, size, PieceSize, digests, fileHash.Sum(nil))
+	if err != nil {
+		return nil, nil, err
+	}
+	metaBytes, err := m.Encode()
+	if err != nil {
+		return nil, nil, err
+	}
+	info := &pppv1.FileInfo{
+		Key:             &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+		FileSize:        size,
+		PieceSize:       PieceSize,
+		PieceCount:      int64(len(digests)),
+		MetadataId:      MetadataID(metaBytes),
+		MetadataSize:    int64(len(metaBytes)),
+		DigestAlgorithm: DigestAlgorithmSHA256,
+	}
+	return metaBytes, info, nil
+}
+
+// GetFileInfo serves the fake's sealed artifact info (C4); it honors the
+// configured error code (e.g. BANNED) like GetPiece does.
+func (f *fakeDataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
+	f.mu.Lock()
+	code := f.errCode
+	f.mu.Unlock()
+	if code != pppv1.Error_ERROR_CODE_UNSPECIFIED {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+			Error: &pppv1.Error{Code: code, Message: "peer error"},
+		}}, nil
+	}
+	if req.GetKey() == nil {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+			Error: &pppv1.Error{Code: pppv1.Error_BAD_REQUEST, Message: "key required"},
+		}}, nil
+	}
+	_, info, err := f.buildMetadata(req.GetKey().GetTreeId(), req.GetKey().GetFilename())
+	if err != nil {
+		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+			Error: &pppv1.Error{Code: pppv1.Error_NOT_FOUND, Message: "artifact not found"},
+		}}, nil
+	}
+	return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Info{Info: info}}, nil
+}
+
+// GetMetadata streams the fake's sealed metadata bytes (C4).
+func (f *fakeDataServer) GetMetadata(req *pppv1.GetMetadataRequest, stream pppv1.Data_GetMetadataServer) error {
+	if req.GetKey() == nil {
+		return status.Error(codes.InvalidArgument, "key required")
+	}
+	metaBytes, info, err := f.buildMetadata(req.GetKey().GetTreeId(), req.GetKey().GetFilename())
+	if err != nil {
+		return status.Error(codes.NotFound, "artifact not found")
+	}
+	if len(req.GetMetadataId()) > 0 && !bytes.Equal(req.GetMetadataId(), info.GetMetadataId()) {
+		return status.Error(codes.FailedPrecondition, "content conflict: metadata_id mismatch")
+	}
+	return stream.Send(&pppv1.MetadataChunk{MetadataId: info.GetMetadataId(), Offset: 0, Data: metaBytes})
 }
 
 func (f *fakeDataServer) setErr(code pppv1.Error_ErrorCode) {
@@ -481,8 +566,10 @@ func TestDownloaderSealResumeReadsBackDigests(t *testing.T) {
 	for i := range content {
 		content[i] = byte(i * 11)
 	}
-	// The upstream serves only the missing piece 1.
+	// The upstream serves the full artifact (needed for the C4 metadata bind);
+	// the downloader only fetches the missing piece 1 (piece 0 is local).
 	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
 		"t1\x00a.bin\x001": content[int(PieceSize):],
 	}}
 	addr, stop := startFakeData(t, fake)
