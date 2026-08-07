@@ -16,7 +16,6 @@ func TestAgentStopClosesStore(t *testing.T) {
 	cfg.ID = "n1"
 	cfg.Tree = "t1"
 	cfg.DownloadPath = filepath.Join(t.TempDir(), "data")
-	cfg.Store = "mmap"
 	ag, err := NewAgent(cfg)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)

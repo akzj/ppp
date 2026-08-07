@@ -95,14 +95,7 @@ func NewAgent(cfg *Config) (*Agent, error) {
 
 // newPieceStore selects the piece store implementation from the config.
 func newPieceStore(cfg *Config) (PieceStore, error) {
-	// The -store flag is deprecated: file|mmap both select the single unified
-	// sparse-file store (kept for command-line compatibility).
-	switch cfg.Store {
-	case "", "file", "mmap":
-		return NewPieceStore(cfg.DownloadPath)
-	default:
-		return nil, fmt.Errorf("agent: unknown store %q (want file|mmap)", cfg.Store)
-	}
+	return NewPieceStore(cfg.DownloadPath)
 }
 
 // NodeID returns the registered node id.
@@ -138,11 +131,20 @@ func (a *Agent) Start(ctx context.Context) error {
 	go func() { _ = a.grpc.Serve(lis) }()
 
 	node := &pppv1.Node{Id: a.nodeID, Addr: a.addr, TreeId: a.cfg.Tree, Role: a.cfg.Role}
-	reg, err := a.ctl.RegisterNode(ctx, node)
-	if err != nil {
-		a.grpc.Stop()
-		_ = cc.Close()
-		return err
+	// Register with the same backoff the watch loops use: the ctl may be
+	// briefly unreachable or a follower during a leader-election window, and a
+	// node starting then must retry instead of exiting the process.
+	var reg *pppv1.RegisterNodeResponse
+	for {
+		reg, err = a.ctl.RegisterNode(ctx, node)
+		if err == nil {
+			break
+		}
+		if !sleepCtx(ctx, watchRetryDelay) {
+			a.grpc.Stop()
+			_ = cc.Close()
+			return fmt.Errorf("agent %s: register with ctl: %w", a.nodeID, err)
+		}
 	}
 	a.applyTopology(reg.GetTopology())
 	a.mu.Lock()

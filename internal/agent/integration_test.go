@@ -345,3 +345,77 @@ func TestIntegrationDataServerSubscribeLease(t *testing.T) {
 		return ag.leases.Count() == 0
 	})
 }
+
+// TestAgentRegisterRetry verifies the B-2 fix: if the ctl is briefly
+// unreachable (or a follower during the election window) at startup, the
+// initial RegisterNode retries with backoff instead of killing the process.
+func TestAgentRegisterRetry(t *testing.T) {
+	truncateCtlPG(t)
+	// Reserve a loopback port and free it so the ctl is initially DOWN.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe listen: %v", err)
+	}
+	ctlAddr := probe.Addr().String()
+	_ = probe.Close()
+
+	cfg := DefaultConfig()
+	cfg.ID = "root"
+	cfg.Addr = "127.0.0.1:0"
+	cfg.CtlAddr = ctlAddr
+	cfg.Tree = "t1"
+	cfg.Role = pppv1.Node_ROOT
+	cfg.DownloadPath = filepath.Join(t.TempDir(), "data")
+	cfg.HeartbeatInterval = 200 * time.Millisecond
+	ag, err := NewAgent(cfg)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startErr := make(chan error, 1)
+	go func() { startErr <- ag.Start(ctx) }()
+
+	// Give the first register attempts time to fail (the ctl is down).
+	time.Sleep(300 * time.Millisecond)
+
+	// Bring the ctl up on the same address; the retry must succeed.
+	ctlLis, err := net.Listen("tcp", ctlAddr)
+	if err != nil {
+		t.Fatalf("ctl re-listen: %v", err)
+	}
+	ctlCfg := ctl.DefaultConfig()
+	ctlCfg.PGDSN = ctlTestPGDSN
+	ctlCfg.HTTPAddr = "127.0.0.1:0"
+	ctlCtx, ctlCancel := context.WithCancel(context.Background())
+	defer ctlCancel()
+	_, ctlDone, err := ctl.ServeControl(ctlCtx, ctlCfg, ctlLis)
+	if err != nil {
+		t.Fatalf("ServeControl: %v", err)
+	}
+	defer func() { ctlCancel(); <-ctlDone }()
+
+	// The tree must exist before the ctl accepts the node registration.
+	ctlConn, err := grpc.NewClient(ctlAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial ctl: %v", err)
+	}
+	defer ctlConn.Close()
+	if _, err := pppv1.NewControlClient(ctlConn).CreateTree(context.Background(), &pppv1.CreateTreeRequest{
+		Tree: &pppv1.Tree{Id: "t1", RootCount: 1, GroupMembers: 2, GroupChildren: 2},
+	}); err != nil {
+		t.Fatalf("CreateTree: %v", err)
+	}
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("agent Start after ctl recovery: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("agent did not register after the ctl recovered")
+	}
+	if ag.Addr() == "" {
+		t.Fatal("agent did not bind a Data address")
+	}
+}
