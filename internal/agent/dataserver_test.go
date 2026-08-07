@@ -238,3 +238,72 @@ func mustGetMetadataID(t *testing.T, client pppv1.DataClient, treeID, filename s
 	}
 	return info.GetMetadataId()
 }
+
+// TestDataServerDownloadFileCopyFlow verifies the leaf SDK's DownloadFile goes
+// through the C4 copy flow on a non-root node: the stream reaches SUCCESS with
+// the correct local_path, the file content is correct, and the sealed metadata
+// is the exact upstream-copied metadata.
+func TestDataServerDownloadFileCopyFlow(t *testing.T) {
+	content := c3Content()
+	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}}
+	addr, stop := startFakeData(t, fake)
+	defer stop()
+
+	store, err := NewFilePieceStore(t.TempDir() + "/pieces")
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{data: nil}, nil, "member", 4, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	ds := NewDataServer("member", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
+
+	stream := &mockStream{}
+	if err := ds.DownloadFile(&pppv1.DownloadFileRequest{
+		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Size: int64(len(content)), JobId: "leaf:1",
+	}, stream); err != nil {
+		t.Fatalf("DownloadFile: %v", err)
+	}
+	if len(stream.msgs) == 0 {
+		t.Fatal("DownloadFile produced no progress states")
+	}
+	last := stream.msgs[len(stream.msgs)-1]
+	if last.GetState() != pppv1.ProgressState_SUCCESS {
+		t.Fatalf("last state = %v, want SUCCESS (msgs=%v)", last.GetState(), stream.msgs)
+	}
+	if last.GetLocalPath() != filepath.Join(ds.downloadPath, "a.bin") {
+		t.Fatalf("local_path = %q, want <download>/a.bin", last.GetLocalPath())
+	}
+	if !store.IsComplete("a.bin") {
+		t.Fatal("file not sealed after DownloadFile")
+	}
+	// The content is correct.
+	for i := 0; i < 3; i++ {
+		start := i * int(PieceSize)
+		end := start + int(PieceSize)
+		if end > len(content) {
+			end = len(content)
+		}
+		got, err := store.Get("a.bin", int64(i))
+		if err != nil || !bytes.Equal(got, content[start:end]) {
+			t.Fatalf("piece %d mismatch after DownloadFile: %v", i, err)
+		}
+	}
+	// The sealed metadata is the exact upstream-copied bytes.
+	wantMeta, _, err := fake.buildMetadata("t1", "a.bin")
+	if err != nil {
+		t.Fatalf("fake buildMetadata: %v", err)
+	}
+	gotMeta, _, err := store.ReadMetadata("a.bin")
+	if err != nil {
+		t.Fatalf("ReadMetadata: %v", err)
+	}
+	if !bytes.Equal(gotMeta, wantMeta) {
+		t.Fatal("sealed metadata != upstream-copied metadata")
+	}
+}
