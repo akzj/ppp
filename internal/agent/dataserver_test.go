@@ -189,13 +189,11 @@ func TestDataServerResolvePath(t *testing.T) {
 		t.Fatalf("ResolvePath(absent).local_path = %q, want %q", resp.GetLocalPath(), wantPath)
 	}
 
-	// Present file (Put + MarkComplete): exist=true.
+	// Present file (Put + Seal): exist=true.
 	if err := ds.store.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := ds.store.MarkComplete("a.bin", 1); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
+	sealTestFile(t, ds.store, "a.bin", 1)
 	resp, err = ds.ResolvePath(context.Background(), &pppv1.ResolvePathRequest{
 		Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"},
 	})

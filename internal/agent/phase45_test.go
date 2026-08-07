@@ -56,9 +56,7 @@ func TestSparseStoreEvictsIdleComplete(t *testing.T) {
 	if err := st.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := st.MarkComplete("a.bin", 1); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
+	sealTestFile(t, st, "a.bin", 1)
 	ms := st.(*sparsePieceStore)
 	ms.mu.Lock()
 	if len(ms.open) != 1 {

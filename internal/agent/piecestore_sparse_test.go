@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func newSparseTestStore(t *testing.T, dir string) PieceStore {
 }
 
 // TestSparsePieceStoreRoundtrip verifies put/get/complete/delete on the sparse
-// store and that MarkComplete renames the pieces file to <basename>.
+// store and that Seal atomically publishes the three-piece artifact.
 func TestSparsePieceStoreRoundtrip(t *testing.T) {
 	st := newSparseTestStore(t, "")
 
@@ -59,11 +60,9 @@ func TestSparsePieceStoreRoundtrip(t *testing.T) {
 	}
 
 	// Complete: size becomes authoritative, the final file is <basename>.
-	if err := st.MarkComplete("a.bin", 10); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
+	sealTestFile(t, st, "a.bin", 10)
 	if !st.IsComplete("a.bin") {
-		t.Fatal("IsComplete = false after MarkComplete")
+		t.Fatal("IsComplete = false after Seal")
 	}
 	if st.Size("a.bin") != 10 {
 		t.Fatalf("Size = %d, want 10", st.Size("a.bin"))
@@ -89,10 +88,10 @@ func TestSparsePieceStoreRoundtrip(t *testing.T) {
 		t.Fatalf("final file content = %q, %v; want %q", data, err, p0)
 	}
 	if _, err := os.Stat(sc.dir + "/a.bin.cds.pieces"); !os.IsNotExist(err) {
-		t.Fatalf("pieces file still exists after MarkComplete (err=%v)", err)
+		t.Fatalf("pieces file still exists after Seal (err=%v)", err)
 	}
 	if _, err := os.Stat(sc.dir + "/a.bin.cds.index"); !os.IsNotExist(err) {
-		t.Fatalf("index file still exists after MarkComplete (err=%v)", err)
+		t.Fatalf("index file still exists after Seal (err=%v)", err)
 	}
 
 	if err := st.Delete("a.bin"); err != nil {
@@ -152,9 +151,7 @@ func TestSparsePieceStoreHoles(t *testing.T) {
 	if err := st.Put("a.bin", 1, make([]byte, PieceSize)); err != nil {
 		t.Fatalf("Put(1): %v", err)
 	}
-	if err := st.MarkComplete("a.bin", 2*PieceSize+int64(len(p2))); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
+	sealTestFile(t, st, "a.bin", 2*PieceSize+int64(len(p2)))
 	final, err := os.ReadFile(filepath.Join(dir, "a.bin"))
 	if err != nil {
 		t.Fatalf("read final: %v", err)
@@ -221,9 +218,7 @@ func TestSparsePieceStoreCrashRecovery(t *testing.T) {
 	if err := st2.Put("a.bin", 1, p1); err != nil {
 		t.Fatalf("Put(1): %v", err)
 	}
-	if err := st2.MarkComplete("a.bin", total); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
+	sealTestFile(t, st2, "a.bin", total)
 	if !st2.IsComplete("a.bin") {
 		t.Fatal("file not complete after resume")
 	}
@@ -311,12 +306,7 @@ func TestSparseStoreDeleteCleansSidecar(t *testing.T) {
 	if err := st.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := st.MarkComplete("a.bin", 1); err != nil {
-		t.Fatalf("MarkComplete: %v", err)
-	}
-	if err := st.WriteMetadata("a.bin", []byte("meta")); err != nil {
-		t.Fatalf("WriteMetadata: %v", err)
-	}
+	sealTestFile(t, st, "a.bin", 1)
 	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || !ok {
 		t.Fatalf("ReadMetadata before delete = (%v, %v), want present", ok, err)
 	}
@@ -325,5 +315,217 @@ func TestSparseStoreDeleteCleansSidecar(t *testing.T) {
 	}
 	if _, ok, err := st.ReadMetadata("a.bin"); err != nil || ok {
 		t.Fatalf("ReadMetadata after Delete = (%v, %v), want (false, nil)", ok, err)
+	}
+}
+
+// sealTestFile atomically publishes a file with a C2-style self-built
+// metadata: it reads the stored pieces, computes the SHA-256 piece digests +
+// the file digest, builds the FileMetadataV1, and Seals the artifact.
+func sealTestFile(t *testing.T, st PieceStore, filename string, size int64) {
+	t.Helper()
+	pieceCount := int((size + PieceSize - 1) / PieceSize)
+	digests := make([][]byte, pieceCount)
+	fileHash := sha256.New()
+	for i := 0; i < pieceCount; i++ {
+		data, err := st.Get(filename, int64(i))
+		if err != nil {
+			t.Fatalf("sealTestFile Get(%d): %v", i, err)
+		}
+		h := sha256.Sum256(data)
+		digests[i] = h[:]
+		fileHash.Write(data)
+	}
+	m, err := BuildMetadata(filename, size, PieceSize, digests, fileHash.Sum(nil))
+	if err != nil {
+		t.Fatalf("sealTestFile BuildMetadata: %v", err)
+	}
+	metaBytes, err := m.Encode()
+	if err != nil {
+		t.Fatalf("sealTestFile Encode: %v", err)
+	}
+	if err := st.Seal(filename, size, metaBytes); err != nil {
+		t.Fatalf("sealTestFile Seal: %v", err)
+	}
+}
+
+// TestSparseStoreSealThreePiece verifies Seal publishes the three-piece
+// artifact (final + .cds.metadata + .cds.commit) and IsComplete requires all
+// three with a consistent metadata_id.
+func TestSparseStoreSealThreePiece(t *testing.T) {
+	dir := t.TempDir()
+	st, err := NewFilePieceStore(dir)
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	p0 := bytes.Repeat([]byte("a"), int(PieceSize))
+	p1 := bytes.Repeat([]byte("b"), 10)
+	if err := st.Put("a.bin", 0, p0); err != nil {
+		t.Fatalf("Put(0): %v", err)
+	}
+	if err := st.Put("a.bin", 1, p1); err != nil {
+		t.Fatalf("Put(1): %v", err)
+	}
+	sealTestFile(t, st, "a.bin", int64(len(p0)+len(p1)))
+
+	sp := st.(*sparsePieceStore)
+	finalPath, metadataPath, commitPath := artifactPaths(sp.dir, "a.bin")
+	for _, p := range []string{finalPath, metadataPath, commitPath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("missing sealed artifact %s: %v", p, err)
+		}
+	}
+	if !st.IsComplete("a.bin") {
+		t.Fatal("sealed artifact not complete")
+	}
+	// The commit's metadata_id must equal SHA-256 of the local metadata.
+	meta, _, err := sp.ReadMetadata("a.bin")
+	if err != nil {
+		t.Fatalf("ReadMetadata: %v", err)
+	}
+	commitData, err := os.ReadFile(commitPath)
+	if err != nil {
+		t.Fatalf("ReadFile commit: %v", err)
+	}
+	commitID, err := DecodeCommit(commitData)
+	if err != nil {
+		t.Fatalf("DecodeCommit: %v", err)
+	}
+	if !bytes.Equal(commitID, MetadataID(meta)) {
+		t.Fatal("commit metadata_id != SHA-256(local metadata)")
+	}
+	// A fresh store over the same directory still sees it sealed.
+	st2, err := NewFilePieceStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = st2.Close() })
+	if !st2.IsComplete("a.bin") {
+		t.Fatal("reopened store does not see the sealed artifact")
+	}
+	got, err := st2.Get("a.bin", 0)
+	if err != nil || !bytes.Equal(got, p0) {
+		t.Fatalf("reopened Get(0) = %q, %v; want p0", got, err)
+	}
+	// Delete cleans the whole three-piece set.
+	if err := st2.Delete("a.bin"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, p := range []string{finalPath, metadataPath, commitPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("Delete left %s (err=%v)", p, err)
+		}
+	}
+}
+
+// TestSparseStoreSealCrashRecovery injects crashes at each point of Seal and
+// asserts only the fully-consistent three-piece state is complete; every
+// partial state is NOT complete (never served), exactly per design §9.
+func TestSparseStoreSealCrashRecovery(t *testing.T) {
+	content := [][]byte{bytes.Repeat([]byte("a"), int(PieceSize)), bytes.Repeat([]byte("b"), 10)}
+	size := int64(len(content[0]) + len(content[1]))
+	metaBytes := func(t *testing.T) []byte {
+		t.Helper()
+		d0 := sha256.Sum256(content[0])
+		d1 := sha256.Sum256(content[1])
+		fileHash := sha256.New()
+		fileHash.Write(content[0])
+		fileHash.Write(content[1])
+		m, err := BuildMetadata("a.bin", size, PieceSize, [][]byte{d0[:], d1[:]}, fileHash.Sum(nil))
+		if err != nil {
+			t.Fatalf("BuildMetadata: %v", err)
+		}
+		b, err := m.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}(t)
+
+	mkStore := func(t *testing.T) (*sparsePieceStore, string) {
+		t.Helper()
+		dir := t.TempDir()
+		st, err := NewFilePieceStore(dir)
+		if err != nil {
+			t.Fatalf("NewFilePieceStore: %v", err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		if err := st.Put("a.bin", 0, content[0]); err != nil {
+			t.Fatalf("Put(0): %v", err)
+		}
+		if err := st.Put("a.bin", 1, content[1]); err != nil {
+			t.Fatalf("Put(1): %v", err)
+		}
+		return st.(*sparsePieceStore), dir
+	}
+
+	// State 1: data only (pieces + index). Incomplete, resumable.
+	st1, _ := mkStore(t)
+	if st1.IsComplete("a.bin") {
+		t.Fatal("data-only state reported complete")
+	}
+	if data, err := st1.Get("a.bin", 0); err != nil || !bytes.Equal(data, content[0]) {
+		t.Fatalf("data-only Get(0) = %q, %v; want resume-able piece", data, err)
+	}
+
+	// State 2: data + metadata (no commit, no rename). Incomplete.
+	st2, _ := mkStore(t)
+	_, metadataPath, _ := artifactPaths(st2.dir, "a.bin")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if st2.IsComplete("a.bin") {
+		t.Fatal("data+metadata (no commit) reported complete")
+	}
+
+	// State 3: renamed data + metadata, no commit. Incomplete (never served).
+	st3, _ := mkStore(t)
+	piecesPath, _, finalPath := sparseFilePaths(st3.dir, "a.bin")
+	_, metadataPath3, _ := artifactPaths(st3.dir, "a.bin")
+	if err := os.Rename(piecesPath, finalPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if err := os.WriteFile(metadataPath3, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if st3.IsComplete("a.bin") {
+		t.Fatal("renamed-no-commit state reported complete")
+	}
+
+	// State 4: commit present but its metadata_id does NOT match the sidecar.
+	// Incomplete (consistency check rejects it).
+	st4, _ := mkStore(t)
+	_, metadataPath4, commitPath4 := artifactPaths(st4.dir, "a.bin")
+	if err := os.WriteFile(metadataPath4, metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	piecesPath4, _, finalPath4 := sparseFilePaths(st4.dir, "a.bin")
+	if err := os.Rename(piecesPath4, finalPath4); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	wrongCommit, err := EncodeCommit(make([]byte, MetadataDigestSize))
+	if err != nil {
+		t.Fatalf("EncodeCommit: %v", err)
+	}
+	if err := os.WriteFile(commitPath4, wrongCommit, 0o644); err != nil {
+		t.Fatalf("write commit: %v", err)
+	}
+	if st4.IsComplete("a.bin") {
+		t.Fatal("mismatched-commit state reported complete")
+	}
+
+	// State 5: all three consistent -> complete.
+	st5, dir5 := mkStore(t)
+	sealTestFile(t, st5, "a.bin", size)
+	if !st5.IsComplete("a.bin") {
+		t.Fatal("fully sealed artifact not complete")
+	}
+	st5b, err := NewFilePieceStore(dir5)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = st5b.Close() })
+	if !st5b.IsComplete("a.bin") {
+		t.Fatal("reopened sealed artifact not complete")
 	}
 }

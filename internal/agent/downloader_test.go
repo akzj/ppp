@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash/crc64"
@@ -395,5 +397,141 @@ func TestDownloaderAppendsOwnHop(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.lastFrom) != 2 || fake.lastFrom[0].GetNodeId() != "child" || fake.lastFrom[1].GetNodeId() != "me" {
 		t.Fatalf("from chain = %v, want [child, me]", fake.lastFrom)
+	}
+}
+
+// TestDownloaderSealPublishesArtifact verifies the C2 completion path end to
+// end: after a download the artifact is Sealed (final + .cds.metadata +
+// .cds.commit all present), the metadata decodes to the correct SHA-256 piece
+// digests, and the commit's metadata_id matches the local metadata.
+func TestDownloaderSealPublishesArtifact(t *testing.T) {
+	content := make([]byte, int(PieceSize)+10)
+	for i := range content {
+		content[i] = byte(i * 7)
+	}
+	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize):],
+	}}
+	addr, stop := startFakeData(t, fake)
+	defer stop()
+
+	dm, store := newTestManager(t, &fakeTopology{addrs: []string{addr}}, nil)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !store.IsComplete("a.bin") {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !store.IsComplete("a.bin") {
+		t.Fatal("file not sealed after download")
+	}
+
+	sp := store.(*sparsePieceStore)
+	finalPath, metadataPath, commitPath := artifactPaths(sp.dir, "a.bin")
+	for _, p := range []string{finalPath, metadataPath, commitPath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("missing sealed artifact %s: %v", p, err)
+		}
+	}
+	metaData, _, err := sp.ReadMetadata("a.bin")
+	if err != nil || len(metaData) == 0 {
+		t.Fatalf("ReadMetadata = %d bytes, %v", len(metaData), err)
+	}
+	m, err := DecodeMetadata(metaData)
+	if err != nil {
+		t.Fatalf("DecodeMetadata: %v", err)
+	}
+	if m.Filename != "a.bin" || m.PieceCount != 2 || m.DigestAlgo != DigestAlgorithmSHA256 {
+		t.Fatalf("metadata fields mismatch: %+v", m)
+	}
+	for i := 0; i < 2; i++ {
+		start := i * int(PieceSize)
+		end := start + int(PieceSize)
+		if end > len(content) {
+			end = len(content) // last piece is shorter than PieceSize
+		}
+		want := sha256.Sum256(content[start:end])
+		got, err := m.PieceDigest(i)
+		if err != nil || !bytes.Equal(got, want[:]) {
+			t.Fatalf("piece digest %d = %x, %v; want %x", i, got, err, want)
+		}
+	}
+	commitData, err := os.ReadFile(commitPath)
+	if err != nil {
+		t.Fatalf("read commit: %v", err)
+	}
+	commitID, err := DecodeCommit(commitData)
+	if err != nil {
+		t.Fatalf("DecodeCommit: %v", err)
+	}
+	if !bytes.Equal(commitID, MetadataID(metaData)) {
+		t.Fatal("commit metadata_id != SHA-256(local metadata)")
+	}
+}
+
+// TestDownloaderSealResumeReadsBackDigests verifies the resumed-piece path:
+// a piece already in the store (from a previous run) contributes its digest
+// via read-back at Seal time, so a resumed download still publishes a
+// consistent three-piece artifact with the correct metadata.
+func TestDownloaderSealResumeReadsBackDigests(t *testing.T) {
+	content := make([]byte, int(PieceSize)+10)
+	for i := range content {
+		content[i] = byte(i * 11)
+	}
+	// The upstream serves only the missing piece 1.
+	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x001": content[int(PieceSize):],
+	}}
+	addr, stop := startFakeData(t, fake)
+	defer stop()
+
+	// The store already has piece 0 (a previous run crashed mid-download);
+	// the downloader only fetches the missing piece 1, then Seals with piece
+	// 0's digest read back from the store.
+	store, err := NewFilePieceStore(newTestStoreDir(t))
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Put("a.bin", 0, content[:int(PieceSize)]); err != nil {
+		t.Fatalf("pre-seed Put(0): %v", err)
+	}
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{data: nil}, nil, "me", 4, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin", Size: int64(len(content))})
+	d.addNeed()
+	defer d.releaseNeed()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !store.IsComplete("a.bin") {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !store.IsComplete("a.bin") {
+		t.Fatal("resumed file not sealed")
+	}
+	sp := store.(*sparsePieceStore)
+	metaData, _, err := sp.ReadMetadata("a.bin")
+	if err != nil {
+		t.Fatalf("ReadMetadata: %v", err)
+	}
+	m, err := DecodeMetadata(metaData)
+	if err != nil {
+		t.Fatalf("DecodeMetadata: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		start := i * int(PieceSize)
+		end := start + int(PieceSize)
+		if end > len(content) {
+			end = len(content)
+		}
+		want := sha256.Sum256(content[start:end])
+		got, err := m.PieceDigest(i)
+		if err != nil || !bytes.Equal(got, want[:]) {
+			t.Fatalf("resumed piece digest %d = %x, %v; want %x", i, got, err, want)
+		}
 	}
 }
