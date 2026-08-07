@@ -93,11 +93,14 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
 		return errResp(pppv1.Error_BANNED, "file is banned"), nil
 	}
-	// Local hit: a sealed artifact is served only when the request's
-	// metadata_id matches its own; a mismatch is CONTENT_CONFLICT (§5.1) —
-	// never serve one artifact under another artifact's identity.
+	// Local hit: a present piece is served only when the request's
+	// metadata_id matches the artifact's identity — a sealed sidecar's id, or
+	// an in-progress downloader's bound id (the root-below pipeline, decision
+	// 1: a non-root serves pieces it already has while the file is still
+	// downloading). A mismatch is CONTENT_CONFLICT (§5.1): never serve one
+	// artifact under another artifact's identity.
 	if data, err := s.store.Get(key.GetFilename(), req.GetIndex()); err == nil {
-		if meta, ok, _ := s.store.ReadMetadata(key.GetFilename()); ok && !bytes.Equal(req.GetMetadataId(), MetadataID(meta)) {
+		if id := s.artifactMetadataID(key.GetTreeId(), key.GetFilename()); len(id) > 0 && !bytes.Equal(req.GetMetadataId(), id) {
 			return errResp(pppv1.Error_CONTENT_CONFLICT, "content conflict: metadata_id mismatch"), nil
 		}
 		return s.pieceResponse(key, req.GetIndex(), data), nil
@@ -179,6 +182,16 @@ func (s *DataServer) sealedFileInfo(key *pppv1.TreeKey) (*pppv1.FileInfo, bool) 
 		MetadataSize:    int64(len(meta)),
 		DigestAlgorithm: m.DigestAlgo,
 	}, true
+}
+
+// artifactMetadataID returns the identity under which a present piece may be
+// served: the sealed metadata sidecar's id, or the in-progress downloader's
+// bound metadata id (empty when neither exists).
+func (s *DataServer) artifactMetadataID(treeID, filename string) []byte {
+	if meta, ok, _ := s.store.ReadMetadata(filename); ok {
+		return MetadataID(meta)
+	}
+	return s.dm.BoundMetadataID(treeID, filename)
 }
 
 // GetFileInfo returns the sealed artifact's info (§5.1): banned -> BANNED;

@@ -1199,6 +1199,19 @@ func (m *DownloaderManager) IsBuilding(treeID, filename string) bool {
 	return d.running && !d.complete && d.fileErr == nil
 }
 
+// BoundMetadataID returns the active downloader's bound metadata_id (empty
+// when none is bound yet). Used by the dataserver to serve in-progress pieces
+// (the root-below pipeline) only under the artifact's true identity.
+func (m *DownloaderManager) BoundMetadataID(treeID, filename string) []byte {
+	d := m.Get(treeID, filename)
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.metaID
+}
+
 // Get returns the active downloader for a file, or nil.
 func (m *DownloaderManager) Get(treeID, filename string) *Downloader {
 	key := treeID + "\x00" + filename

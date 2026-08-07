@@ -59,6 +59,9 @@ type fakeDataServer struct {
 	// GetMetadata streams the full bytes (P1-2: the downloader must bound the
 	// accumulation).
 	overSizedMeta bool
+	// blockPiece blocks GetPiece for a specific index (when release is set);
+	// blockPiece < 0 blocks every GetPiece (the historical behavior).
+	blockPiece int64
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -215,7 +218,7 @@ func (f *fakeDataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceReques
 	release := f.release
 	f.mu.Unlock()
 
-	if release != nil {
+	if release != nil && (f.blockPiece < 0 || req.GetIndex() == f.blockPiece) {
 		select {
 		case <-release:
 		case <-ctx.Done():
