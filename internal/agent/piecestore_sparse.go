@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc64"
@@ -20,7 +21,7 @@ import (
 // and occupy no disk space; the bbolt index is the source of truth for
 // existence.
 //
-//	<DownloadPath>/<basename>            — final file after MarkComplete
+//	<DownloadPath>/<basename>            — sealed final file after Seal
 //	<DownloadPath>/<basename>.cds.pieces — sparse piece data (in progress)
 //	<DownloadPath>/<basename>.cds.index  — bbolt: piece index -> PieceInfo
 //
@@ -71,6 +72,13 @@ func sparseFilePaths(dir, filename string) (piecesPath, indexPath, finalPath str
 		filepath.Join(dir, filename)
 }
 
+// artifactPaths returns the three-piece sealed artifact paths.
+func artifactPaths(dir, filename string) (finalPath, metadataPath, commitPath string) {
+	return filepath.Join(dir, filename),
+		filepath.Join(dir, filename+metadataSidecarExt),
+		filepath.Join(dir, filename+commitExt)
+}
+
 func sparseKey(index int64) []byte {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(index))
@@ -114,10 +122,16 @@ func (s *sparsePieceStore) openLocked(filename string) (*sparseFile, error) {
 		finalPath:  finalPath,
 	}
 
-	if stat, err := os.Stat(finalPath); err == nil {
-		// Completed file: open read-only, every piece exists by construction.
+	if s.sealedOnDisk(filename) {
+		// Sealed artifact (data + metadata + commit all consistent): open
+		// read-only, every piece exists by construction.
 		file, err := os.Open(finalPath)
 		if err != nil {
+			return nil, err
+		}
+		stat, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
 			return nil, err
 		}
 		f.file = file
@@ -318,23 +332,57 @@ func (s *sparsePieceStore) Size(filename string) int64 {
 	return f.size
 }
 
-// IsComplete reports whether the file was finalized by MarkComplete.
-func (s *sparsePieceStore) IsComplete(filename string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f, err := s.openLocked(filename)
+// sealedOnDisk reports whether the three-piece sealed artifact is present and
+// consistent: <basename> + .cds.metadata + .cds.commit exist AND the commit's
+// metadata_id equals the SHA-256 of the local metadata sidecar. A partial
+// publish (e.g. renamed data but no commit) is NOT complete and must never be
+// served. Must hold s.mu.
+func (s *sparsePieceStore) sealedOnDisk(filename string) bool {
+	finalPath, metadataPath, commitPath := artifactPaths(s.dir, filename)
+	if _, err := os.Stat(finalPath); err != nil {
+		return false
+	}
+	meta, err := os.ReadFile(metadataPath)
 	if err != nil {
 		return false
 	}
-	return f.complete
+	commitData, err := os.ReadFile(commitPath)
+	if err != nil {
+		return false
+	}
+	commitID, err := DecodeCommit(commitData)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(commitID, MetadataID(meta))
 }
 
-// MarkComplete finalizes a file: fsync the data, truncate to the exact size,
-// close and drop the index, then rename the pieces file to the final
-// <basename> path and reopen read-only.
-func (s *sparsePieceStore) MarkComplete(filename string, size int64) error {
+// IsComplete reports whether the file was atomically published (Seal).
+func (s *sparsePieceStore) IsComplete(filename string) bool {
+	if !validBasename(filename) {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f, ok := s.open[filename]; ok {
+		return f.complete
+	}
+	return s.sealedOnDisk(filename)
+}
+
+// Seal atomically publishes the completed artifact (design §9): the metadata
+// sidecar is written and fsynced first, then the data, then the rename to
+// <basename>, and the .cds.commit marker is written and fsynced LAST — only
+// when the marker exists and its metadata_id matches the local metadata is the
+// artifact visible and served. A crash before the marker leaves the artifact
+// incomplete (never served; rebuilt on the next attempt). The index is no
+// longer needed once the file is finalized.
+func (s *sparsePieceStore) Seal(filename string, size int64, metadataBytes []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validBasename(filename) {
+		return errors.New("agent: invalid filename")
+	}
 	f, err := s.openLocked(filename)
 	if err != nil {
 		return err
@@ -342,22 +390,43 @@ func (s *sparsePieceStore) MarkComplete(filename string, size int64) error {
 	if f.complete {
 		return nil // idempotent
 	}
+	// 1. metadata sidecar + fsync.
+	_, metadataPath, commitPath := artifactPaths(s.dir, filename)
+	if err := writeFileSync(metadataPath, metadataBytes); err != nil {
+		return err
+	}
+	// 2. fsync the data file.
 	if err := f.file.Sync(); err != nil {
 		return err
 	}
+	// 3. close the index, truncate to the authoritative size, rename to the
+	// final path (same filesystem), then make the rename durable.
 	if err := f.closeLocked(); err != nil {
 		return err
 	}
-	// The index is no longer needed once the file is finalized (closeLocked
-	// already closed it).
-	_ = os.Remove(f.indexPath)
-	// Make the data file exactly the authoritative size.
 	if err := os.Truncate(f.piecesPath, size); err != nil {
 		return err
 	}
 	if err := os.Rename(f.piecesPath, f.finalPath); err != nil {
 		return err
 	}
+	if err := fsyncDir(s.dir); err != nil {
+		return err
+	}
+	// 4. commit marker LAST + fsync (the atomic commit point).
+	commitData, err := EncodeCommit(MetadataID(metadataBytes))
+	if err != nil {
+		return err
+	}
+	if err := writeFileSync(commitPath, commitData); err != nil {
+		return err
+	}
+	if err := fsyncDir(s.dir); err != nil {
+		return err
+	}
+	// 5. the index is no longer needed once finalized (closeLocked already
+	// closed it).
+	_ = os.Remove(f.indexPath)
 	// Switch the cached state to complete (read-only) mode.
 	cf, err := s.openCompleteLocked(f)
 	if err != nil {
@@ -400,6 +469,36 @@ func (s *sparsePieceStore) openCompleteLocked(f *sparseFile) (*sparseFile, error
 
 // metadataSidecarExt is the sidecar file suffix.
 const metadataSidecarExt = ".cds.metadata"
+
+// commitExt is the .cds.commit marker suffix (written LAST at Seal).
+const commitExt = ".cds.commit"
+
+// writeFileSync writes a file and fsyncs it, so a later step can rely on it.
+func writeFileSync(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// fsyncDir fsyncs a directory so a rename/creation inside it is durable.
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
 
 // WriteMetadata writes the metadata sidecar for a file.
 func (s *sparsePieceStore) WriteMetadata(filename string, data []byte) error {
@@ -451,6 +550,8 @@ func (s *sparsePieceStore) Delete(filename string) error {
 	_ = os.Remove(piecesPath)
 	_ = os.Remove(indexPath)
 	_ = os.Remove(finalPath)
-	_ = s.DeleteMetadata(filename) // the .cds.metadata sidecar is part of the artifact
+	_, metadataPath, commitPath := artifactPaths(s.dir, filename)
+	_ = os.Remove(metadataPath)
+	_ = os.Remove(commitPath)
 	return nil
 }

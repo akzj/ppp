@@ -42,8 +42,11 @@ type PieceStore interface {
 	Get(filename string, index int64) ([]byte, error)
 	// HasPiece reports whether the piece exists.
 	HasPiece(filename string, index int64) bool
-	// MarkComplete records the file as fully downloaded with its total size.
-	MarkComplete(filename string, size int64) error
+	// Seal atomically publishes the completed artifact: data + the immutable
+	// metadata sidecar + the .cds.commit marker (written last). Until Seal
+	// succeeds the artifact is not served; a partial Seal is recovered as
+	// incomplete on the next open.
+	Seal(filename string, size int64, metadataBytes []byte) error
 	// IsComplete reports whether the file is fully downloaded.
 	IsComplete(filename string) bool
 	// Size returns the recorded file size (0 when unknown).

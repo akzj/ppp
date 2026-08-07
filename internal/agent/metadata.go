@@ -179,6 +179,48 @@ func (m *FileMetadataV1) PieceDigest(index int) ([]byte, error) {
 	return m.PieceDigests[index], nil
 }
 
+// ============ .cds.commit marker (C2) ============
+//
+// The commit marker is the LAST thing written when an artifact is atomically
+// published (Seal). Its content is deliberately minimal and deterministic —
+// magic + version + metadata_id — with no size, timestamp or node identity, so
+// the same artifact always produces the same marker and the recovery check is
+// a pure byte comparison.
+
+var commitMagic = [5]byte{'P', 'P', 'P', 'C', 'M'}
+
+// CommitVersion is the .cds.commit marker format version.
+const CommitVersion = 1
+
+// commitMarkerSize is magic(5) + version(1) + metadata_id(32).
+const commitMarkerSize = 5 + 1 + MetadataDigestSize
+
+// EncodeCommit builds a .cds.commit marker for a metadata_id.
+func EncodeCommit(metadataID []byte) ([]byte, error) {
+	if len(metadataID) != MetadataDigestSize {
+		return nil, fmt.Errorf("commit: metadata_id must be %d bytes", MetadataDigestSize)
+	}
+	buf := make([]byte, 0, commitMarkerSize)
+	buf = append(buf, commitMagic[:]...)
+	buf = append(buf, CommitVersion)
+	buf = append(buf, metadataID...)
+	return buf, nil
+}
+
+// DecodeCommit parses a .cds.commit marker and returns its metadata_id.
+func DecodeCommit(data []byte) ([]byte, error) {
+	if len(data) != commitMarkerSize {
+		return nil, fmt.Errorf("commit: bad length %d (want %d)", len(data), commitMarkerSize)
+	}
+	if string(data[:len(commitMagic)]) != string(commitMagic[:]) {
+		return nil, errors.New("commit: bad magic")
+	}
+	if data[len(commitMagic)] != CommitVersion {
+		return nil, fmt.Errorf("commit: unsupported version %d", data[len(commitMagic)])
+	}
+	return data[len(commitMagic)+1:], nil
+}
+
 // DecodeMetadata parses canonical bytes into a FileMetadataV1, rejecting
 // malformed input.
 func DecodeMetadata(data []byte) (*FileMetadataV1, error) {
