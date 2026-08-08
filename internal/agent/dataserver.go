@@ -109,7 +109,26 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	// downloading). A mismatch is CONTENT_CONFLICT (§5.1): never serve one
 	// artifact under another artifact's identity.
 	if data, err := s.store.Get(key.GetFilename(), req.GetIndex()); err == nil {
-		if id := s.artifactMetadataID(key.GetTreeId(), key.GetFilename()); len(id) == 0 || !bytes.Equal(req.GetMetadataId(), id) {
+		id := s.artifactMetadataID(key.GetTreeId(), key.GetFilename())
+		if len(id) == 0 && !s.root {
+			// P2-C: a present piece with an UNKNOWN identity — a crash-restart
+			// resume (pieces cached, no sealed artifact, no bound downloader).
+			// Resolve the artifact identity via the metadata-only handshake,
+			// then compare the request's metadata_id; this is NOT a false
+			// CONTENT_CONFLICT — a leaf with the correct metadata_id resumes
+			// the cached piece.
+			d := s.dm.Ensure(FileNeed{TreeID: key.GetTreeId(), Filename: key.GetFilename()})
+			if info, err := d.FileInfo(ctx); err == nil {
+				id = info.GetMetadataId()
+			}
+		}
+		if len(id) == 0 {
+			// The artifact identity cannot be resolved (no sealed artifact and
+			// no upstream): never serve an unverified piece. For a root the
+			// three-state gate below also returns NOT_READY.
+			return errResp(pppv1.Error_NOT_READY, "artifact identity is not resolved"), nil
+		}
+		if !bytes.Equal(req.GetMetadataId(), id) {
 			return errResp(pppv1.Error_CONTENT_CONFLICT, "content conflict: metadata_id mismatch"), nil
 		}
 		return s.pieceResponse(key, req.GetIndex(), data), nil
@@ -216,7 +235,7 @@ func (s *DataServer) artifactMetadataID(treeID, filename string) []byte {
 // artifact, this performs the metadata-only upstream handshake and returns the
 // bound FileInfo without starting any piece download. A root still builds only
 // via Job and returns NOT_FOUND when no artifact exists.
-func (s *DataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
+func (s *DataServer) GetFileInfo(ctx context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
 	key := req.GetKey()
 	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key (tree_id, filename) is required")
