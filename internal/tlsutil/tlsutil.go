@@ -6,13 +6,18 @@
 package tlsutil
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // LoadServerCredentials builds server-side mTLS credentials that require and
@@ -67,6 +72,97 @@ func LoadClientCredentials(caFile, certFile, keyFile, serverName string) (creden
 		ServerName:   serverName,
 		MinVersion:   tls.VersionTLS12,
 	}), nil
+}
+
+// Role values carried by the certificate Subject OU field (identity
+// authorization, deployment.md). An empty role means the certificate has no
+// OU and therefore no declared identity role.
+const (
+	RoleCtl     = "ctl"     // control-plane operator/leader certificate
+	RoleService = "service" // ppp agent/peer certificate
+	RoleClient  = "client"  // orchestrator/leaf SDK certificate
+)
+
+// CertRole returns the role carried by the certificate's Subject OU (the
+// first OU value, per the deployment convention). A certificate with no OU
+// yields an empty role.
+func CertRole(cert *x509.Certificate) string {
+	if cert == nil || len(cert.Subject.OrganizationalUnit) == 0 {
+		return ""
+	}
+	return cert.Subject.OrganizationalUnit[0]
+}
+
+// PeerRole extracts the peer certificate's role from a gRPC peer (an mTLS
+// call). ok is false when the peer has no TLS auth info (plaintext), so a
+// role check can skip — plaintext is the development path.
+func PeerRole(p *peer.Peer) (role string, ok bool) {
+	if p == nil || p.AuthInfo == nil {
+		return "", false
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return "", false
+	}
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		return "", true // TLS but no peer cert (should not happen with mTLS)
+	}
+	return CertRole(tlsInfo.State.PeerCertificates[0]), true
+}
+
+// roleAuth extracts the role from the caller context. Plaintext (no TLS)
+// yields (role="", skip=true) — the interceptor passes the call through,
+// because plaintext is the development mode and has no identity to check.
+func roleAuth(ctx context.Context) (role string, skip bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", true
+	}
+	role, ok = PeerRole(p)
+	if !ok {
+		return "", true // no TLS auth info (plaintext)
+	}
+	return role, false
+}
+
+// RoleAuthUnaryInterceptor rejects unary calls whose peer certificate role is
+// not in allowed with PermissionDenied (code 7; the message includes the
+// caller's role). Calls without TLS (plaintext) are passed through unchanged.
+func RoleAuthUnaryInterceptor(allowed ...string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		role, skip := roleAuth(ctx)
+		if skip {
+			return handler(ctx, req)
+		}
+		if !roleAllowed(role, allowed) {
+			return nil, status.Errorf(codes.PermissionDenied, "tlsutil: role %q is not allowed for %s", role, info.FullMethod)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// RoleAuthStreamInterceptor is the streaming variant of
+// RoleAuthUnaryInterceptor.
+func RoleAuthStreamInterceptor(allowed ...string) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		role, skip := roleAuth(ss.Context())
+		if skip {
+			return handler(srv, ss)
+		}
+		if !roleAllowed(role, allowed) {
+			return status.Errorf(codes.PermissionDenied, "tlsutil: role %q is not allowed for %s", role, info.FullMethod)
+		}
+		return handler(srv, ss)
+	}
+}
+
+func roleAllowed(role string, allowed []string) bool {
+	for _, a := range allowed {
+		if role == a {
+			return true
+		}
+	}
+	return false
 }
 
 func loadCertPool(caFile string) (*x509.CertPool, error) {

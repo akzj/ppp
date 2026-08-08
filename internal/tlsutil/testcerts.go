@@ -52,14 +52,19 @@ func GenerateTestCA() (*x509.Certificate, *ecdsa.PrivateKey, *x509.CertPool, err
 // both a server and a client). It returns the PEM-encoded certificate and
 // private key (write them to temp files for LoadServerCredentials /
 // LoadClientCredentials).
-func GenerateTestCert(ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, dnsNames []string, ips []net.IP, usages []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
+func GenerateTestCert(ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn, ou string, dnsNames []string, ips []net.IP, usages []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tlsutil: generate cert key: %w", err)
 	}
+	subject := pkix.Name{CommonName: cn}
+	if ou != "" {
+		// The OU carries the identity role (ctl/service/client, Phase 10).
+		subject.OrganizationalUnit = []string{ou}
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      subject,
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

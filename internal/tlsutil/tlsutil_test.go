@@ -11,7 +11,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 func writeTempPEM(t *testing.T, name string, data []byte) string {
@@ -29,7 +33,7 @@ func caPEM(ca *x509.Certificate) []byte {
 
 func mustCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage) (certPEM, keyPEM []byte) {
 	t.Helper()
-	certPEM, keyPEM, err := GenerateTestCert(ca, caKey, cn, dns, ips, usages)
+	certPEM, keyPEM, err := GenerateTestCert(ca, caKey, cn, "", dns, ips, usages)
 	if err != nil {
 		t.Fatalf("GenerateTestCert(%s): %v", cn, err)
 	}
@@ -43,7 +47,7 @@ func TestGenerateTestCerts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateTestCA: %v", err)
 	}
-	certPEM, _, err := GenerateTestCert(ca, caKey, "svc", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	certPEM, _, err := GenerateTestCert(ca, caKey, "svc", "", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
 	if err != nil {
 		t.Fatalf("GenerateTestCert: %v", err)
 	}
@@ -222,3 +226,109 @@ func caPoolFromCert(ca *x509.Certificate) *x509.CertPool {
 	pool.AddCert(ca)
 	return pool
 }
+
+// TestCertRole verifies role extraction from the certificate Subject OU.
+func TestCertRole(t *testing.T) {
+	ca, caKey, _, err := GenerateTestCA()
+	if err != nil {
+		t.Fatalf("GenerateTestCA: %v", err)
+	}
+	certPEM, _, err := GenerateTestCert(ca, caKey, "node-a", RoleService, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	if err != nil {
+		t.Fatalf("GenerateTestCert(service): %v", err)
+	}
+	noOU, _, err := GenerateTestCert(ca, caKey, "node-b", "", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	if err != nil {
+		t.Fatalf("GenerateTestCert(no OU): %v", err)
+	}
+	parse := func(der []byte) *x509.Certificate {
+		t.Helper()
+		block, _ := pem.Decode(der)
+		if block == nil {
+			t.Fatal("no PEM block")
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("ParseCertificate: %v", err)
+		}
+		return c
+	}
+	if got := CertRole(parse(certPEM)); got != RoleService {
+		t.Fatalf("CertRole(service) = %q, want %q", got, RoleService)
+	}
+	if got := CertRole(parse(noOU)); got != "" {
+		t.Fatalf("CertRole(no OU) = %q, want empty", got)
+	}
+	if got := CertRole(nil); got != "" {
+		t.Fatalf("CertRole(nil) = %q, want empty", got)
+	}
+}
+
+// TestRoleAuthInterceptors verifies the unary + stream role interceptors:
+// allowed roles pass, disallowed roles get PermissionDenied, and plaintext
+// (no TLS peer info) passes through.
+func TestRoleAuthInterceptors(t *testing.T) {
+	okUnary := func(ctx context.Context) error {
+		_, err := RoleAuthUnaryInterceptor(RoleService, RoleClient)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/p.F/M"}, func(context.Context, interface{}) (interface{}, error) {
+			return "ok", nil
+		})
+		return err
+	}
+	// Plaintext (no peer in the ctx) passes through.
+	if err := okUnary(context.Background()); err != nil {
+		t.Fatalf("plaintext unary = %v, want pass-through", err)
+	}
+	// A peer with a service-role cert passes.
+	svcCtx := peerCtxWithRole(t, RoleService)
+	if err := okUnary(svcCtx); err != nil {
+		t.Fatalf("service unary = %v, want ok", err)
+	}
+	// A disallowed role is PermissionDenied (code 7).
+	badCtx := peerCtxWithRole(t, "admin")
+	err := okUnary(badCtx)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("admin unary code = %v, want PermissionDenied", status.Code(err))
+	}
+	// Streaming variant.
+	streamCtx := peerCtxWithRole(t, RoleService)
+	streamErr := RoleAuthStreamInterceptor(RoleService)(nil, &mockSS{ctx: streamCtx}, &grpc.StreamServerInfo{FullMethod: "/p.F/S"}, func(interface{}, grpc.ServerStream) error { return nil })
+	if streamErr != nil {
+		t.Fatalf("service stream = %v, want ok", streamErr)
+	}
+	badStream := RoleAuthStreamInterceptor(RoleService)(nil, &mockSS{ctx: peerCtxWithRole(t, "admin")}, &grpc.StreamServerInfo{FullMethod: "/p.F/S"}, func(interface{}, grpc.ServerStream) error { return nil })
+	if status.Code(badStream) != codes.PermissionDenied {
+		t.Fatalf("admin stream code = %v, want PermissionDenied", status.Code(badStream))
+	}
+}
+
+// peerCtxWithRole builds a context carrying an mTLS peer whose certificate
+// has the given OU role.
+func peerCtxWithRole(t *testing.T, ou string) context.Context {
+	t.Helper()
+	ca, caKey, _, err := GenerateTestCA()
+	if err != nil {
+		t.Fatalf("GenerateTestCA: %v", err)
+	}
+	certPEM, _, err := GenerateTestCert(ca, caKey, "peer", ou, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	if err != nil {
+		t.Fatalf("GenerateTestCert: %v", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	return peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{
+			State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}},
+		},
+	})
+}
+
+// mockSS is a minimal ServerStream for the streaming interceptor test.
+type mockSS struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (m *mockSS) Context() context.Context { return m.ctx }
