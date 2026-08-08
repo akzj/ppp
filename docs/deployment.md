@@ -235,6 +235,48 @@ then verifies the **dialed address's hostname**. Since this system normally dial
 
 A cert that matches neither the configured name nor the dialed IP is rejected.
 
+## Identity authorization (certificate roles)
+
+mTLS proves *who* the peer is (the CA signed its certificate) but not *what it may do*: any
+certificate signed by the CA could claim any role. Phase 10 closes that gap by binding an
+**identity role** to the certificate's **Subject OU** field and having each server reject callers
+whose role is not allowed.
+
+**Role convention** (one OU value per certificate):
+
+| Role | Carried by | Allowed to |
+|------|-----------|------------|
+| `ctl` | the control-plane operator/leader certificate | (reserved for the control plane) |
+| `service` | ppp agent/peer certificates | call the ctl (RegisterNode/Subscribe) and peer Data APIs |
+| `client` | orchestrator/leaf SDK certificates | call the ctl (CreateTree/CreateJob) and leaf Data APIs |
+
+**Flag** (both binaries): `-tls-require-role <comma-separated roles>`
+
+- Set, e.g. `-tls-require-role service,client`: the server installs unary + streaming role
+  interceptors and rejects any caller whose certificate OU is not in the list with
+  **PermissionDenied** (gRPC code 7; the message includes the caller's role).
+- Unset (default): mTLS keeps working exactly as before — **no role check**. Certificates without
+  an OU (older deployments) are fully compatible.
+- Plaintext (no TLS flags): nothing to check — calls pass through even if the flag is set.
+
+Example with the openssl commands above, adding the OU to each `-subj`:
+
+```sh
+# ctl server cert (no role needed — it only serves)
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout ctl.key -out ctl.csr -nodes \
+  -subj "/CN=ppp-ctl"
+# node cert with the service role
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout node.key -out node.csr -nodes \
+  -subj "/CN=ppp-node/OU=service"
+# orchestrator cert with the client role
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout orch.key -out orch.csr -nodes \
+  -subj "/CN=ppp-orch/OU=client"
+```
+
+Run the ctl with `-tls-require-role service,client` and each service with
+`-tls-require-role service,client`; orchestrator/leaf clients connect with a `client`-OU
+certificate. A certificate with any other OU (or none) is rejected at the RPC boundary.
+
 ## Memory and CI notes
 
 - The test suite is green with `go test ./...` and
