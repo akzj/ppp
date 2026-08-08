@@ -239,7 +239,7 @@ func (s *DataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoReques
 	}
 	if !s.root {
 		d := s.dm.Ensure(FileNeed{TreeID: key.GetTreeId(), Filename: key.GetFilename()})
-		info, err := d.FileInfo()
+		info, err := d.FileInfo(ctx)
 		if err == nil {
 			return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Info{Info: info}}, nil
 		}

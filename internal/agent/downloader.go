@@ -461,7 +461,7 @@ func (d *Downloader) run() {
 		// (no sealed sibling) marks bindAttempted and proceeds (C2/C3).
 		if d.meta == nil && !d.bindAttempted {
 			d.mu.Unlock()
-			if err := d.bindMetadata(); err != nil {
+			if err := d.bindMetadata(d.ctx); err != nil {
 				if errors.Is(err, errFileBanned) {
 					d.fail(errFileBanned)
 					return
@@ -544,7 +544,7 @@ func (d *Downloader) nextMissingLocked() int64 {
 // GetMetadata stream -> verify metadata_id == SHA-256(bytes) -> bind. The
 // primary root (PullFromSource with no upstreams) self-builds at Seal time
 // (C2/C3) and returns nil without binding.
-func (d *Downloader) bindMetadata() error {
+func (d *Downloader) bindMetadata(ctx context.Context) error {
 	d.metaBindMu.Lock()
 	defer d.metaBindMu.Unlock()
 	d.mu.Lock()
@@ -569,7 +569,7 @@ func (d *Downloader) bindMetadata() error {
 	var selectedBytes []byte
 	var selectedSize int64
 	for _, addr := range upstreams {
-		meta, metaBytes, size, err := d.fetchMetadataFrom(addr)
+		meta, metaBytes, size, err := d.fetchMetadataFrom(ctx, addr)
 		if err != nil {
 			if errors.Is(err, errFileBanned) || errors.Is(err, errContentConflict) {
 				return err
@@ -614,8 +614,8 @@ func (d *Downloader) bindMetadata() error {
 // a caller asks its chosen node for FileInfo, that node resolves immutable
 // metadata from its upstream, and only then does the caller issue GetPiece
 // with the returned metadata_id.
-func (d *Downloader) FileInfo() (*pppv1.FileInfo, error) {
-	if err := d.bindMetadata(); err != nil {
+func (d *Downloader) FileInfo(ctx context.Context) (*pppv1.FileInfo, error) {
+	if err := d.bindMetadata(ctx); err != nil {
 		return nil, err
 	}
 	d.mu.Lock()
@@ -637,12 +637,12 @@ func (d *Downloader) FileInfo() (*pppv1.FileInfo, error) {
 // fetchMetadataFrom copies the sealed metadata from one upstream and verifies
 // it (§5.2a/d): GetFileInfo -> GetMetadata stream -> metadata_id ==
 // SHA-256(bytes) -> decode + cross-check the file size.
-func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, int64, error) {
+func (d *Downloader) fetchMetadataFrom(ctx context.Context, addr string) (*FileMetadataV1, []byte, int64, error) {
 	client, err := d.peers.client(addr)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	callCtx, cancel := context.WithTimeout(d.ctx, pieceFetchTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, pieceFetchTimeout)
 	defer cancel()
 	key := &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename}
 	infoResp, err := client.GetFileInfo(callCtx, &pppv1.GetFileInfoRequest{Key: key})

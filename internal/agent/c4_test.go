@@ -206,7 +206,7 @@ func TestDownloaderMetadataBindRejectsConflictingUpstreams(t *testing.T) {
 
 	dm, _ := newTestManager(t, &fakeTopology{addrs: []string{addrA, addrB}}, nil)
 	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin"})
-	if _, err := d.FileInfo(); !errors.Is(err, errContentConflict) {
+	if _, err := d.FileInfo(context.Background()); !errors.Is(err, errContentConflict) {
 		t.Fatalf("FileInfo error = %v, want errContentConflict", err)
 	}
 	if len(d.MetadataID()) != 0 {
