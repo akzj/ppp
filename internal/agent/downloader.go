@@ -135,7 +135,10 @@ type Downloader struct {
 	fileErr       error
 	complete      bool
 	running       bool
-	wakeCh        chan struct{}
+	// gen is incremented on every startLocked; a run(gen) superseded by a
+	// newer start must not clear the newer run's flags (P1 race fix).
+	gen    uint64
+	wakeCh chan struct{}
 	// need counts active holders of this file (child subscribers + active
 	// piece waiters); jobNeed marks a root job-driven download. When need
 	// reaches zero and the file is not complete the downloader stops and is
@@ -206,15 +209,25 @@ func (d *Downloader) ensureSizeLocked(size int64) {
 // a restart must not let dense demand bypass the failure backoff (P2-1).
 // Banned/failed downloaders never restart. Call with d.mu held.
 func (d *Downloader) startLocked() {
-	if d.running || d.size <= 0 || d.fileErr != nil {
+	if d.size <= 0 || d.fileErr != nil {
 		return
 	}
+	if d.running && d.ctx.Err() == nil {
+		// A healthy run is already in progress; don't supersede it.
+		return
+	}
+	// (Re)start: either no run, or the old run is STOPPING — a silent stop
+	// canceled its ctx but the old deferred is still draining in-flight
+	// fetches (wg.Wait) before it clears running. Supersede it with a fresh
+	// generation; the overtaken old run exits at its loop top (P1 race fix)
+	// and does not clear the new run's flags.
 	if d.ctx.Err() != nil {
 		d.ctx, d.cancel = context.WithCancel(context.Background())
 		d.inflight = make(map[int64]bool)
 	}
+	d.gen++
 	d.running = true
-	go d.run()
+	go d.run(d.gen)
 }
 
 // Need returns the current need count (tests/debugging).
@@ -443,12 +456,27 @@ func (d *Downloader) wake() {
 
 // run is the fetch loop: it dispatches every missing piece with bounded
 // concurrency until the file is complete, canceled, or failed.
-func (d *Downloader) run() {
+func (d *Downloader) run(gen uint64) {
 	sem := make(chan struct{}, d.concurrency)
 	var wg sync.WaitGroup
+	// Capture the run's ctx ONCE under the lock: a concurrent restart
+	// (startLocked) may replace d.ctx, and the run must consistently use the
+	// ctx it was started with (the old in-flight fetches converge via this
+	// canceled ctx; they must never pick up the new run's ctx).
+	d.mu.Lock()
+	runCtx := d.ctx
+	d.mu.Unlock()
 	defer func() {
 		wg.Wait()
 		d.mu.Lock()
+		if d.gen != gen {
+			// An overtaken old run: a newer startLocked superseded it, so it
+			// must not clear the newer run's flags or act on completion (P1
+			// race fix). Its in-flight fetches have converged via the
+			// canceled ctx (wg.Wait above).
+			d.mu.Unlock()
+			return
+		}
 		d.checkCompleteLocked()
 		complete := d.complete
 		failed := d.fileErr != nil
@@ -471,7 +499,13 @@ func (d *Downloader) run() {
 	}()
 	for {
 		d.mu.Lock()
-		if d.fileErr != nil || d.ctx.Err() != nil {
+		if d.gen != gen {
+			// The run was superseded by a restart: exit immediately (the old
+			// in-flight fetches converge via the canceled ctx).
+			d.mu.Unlock()
+			break
+		}
+		if d.fileErr != nil || runCtx.Err() != nil {
 			d.mu.Unlock()
 			break
 		}
@@ -481,7 +515,7 @@ func (d *Downloader) run() {
 		// (no sealed sibling) marks bindAttempted and proceeds (C2/C3).
 		if d.meta == nil && !d.bindAttempted {
 			d.mu.Unlock()
-			if err := d.bindMetadata(d.ctx); err != nil {
+			if err := d.bindMetadata(runCtx); err != nil {
 				if errors.Is(err, errFileBanned) {
 					d.fail(errFileBanned)
 					return
@@ -491,7 +525,7 @@ func (d *Downloader) run() {
 				select {
 				case <-time.After(noUpstreamRetry):
 				case <-d.wakeCh:
-				case <-d.ctx.Done():
+				case <-runCtx.Done():
 					return
 				}
 				continue
@@ -514,13 +548,13 @@ func (d *Downloader) run() {
 
 		select {
 		case sem <- struct{}{}:
-		case <-d.ctx.Done():
+		case <-runCtx.Done():
 			d.mu.Lock()
 			delete(d.inflight, index)
 			d.mu.Unlock()
 			break
 		}
-		if d.ctx.Err() != nil {
+		if runCtx.Err() != nil {
 			d.mu.Lock()
 			delete(d.inflight, index)
 			d.mu.Unlock()
@@ -530,7 +564,7 @@ func (d *Downloader) run() {
 		go func(idx int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			d.fetchPiece(idx)
+			d.fetchPiece(runCtx, idx)
 		}(index)
 	}
 }
@@ -874,7 +908,7 @@ func (d *Downloader) sealChecked(metaBytes []byte) error {
 }
 
 // fetchPiece fetches one piece with retries, stores it and notifies waiters.
-func (d *Downloader) fetchPiece(index int64) {
+func (d *Downloader) fetchPiece(ctx context.Context, index int64) {
 	// Every exit path (including ctx cancellation) clears the in-flight mark,
 	// so a silently stopped downloader restarted later can re-dispatch the
 	// piece (P1-B). A demand-cleared retry that did not succeed re-enters the
@@ -895,14 +929,14 @@ func (d *Downloader) fetchPiece(index int64) {
 	var data []byte
 	var err error
 	for attempt := 0; attempt < fetchAttempts; attempt++ {
-		if d.ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
 		if d.banned.IsBanned(d.treeID, d.filename) {
 			d.fail(errFileBanned)
 			return
 		}
-		data, err = d.fetchOnce(index)
+		data, err = d.fetchOnce(ctx, index)
 		if err == nil {
 			// Single-pass boundary validation (§4.2): every piece except the
 			// last is exactly PieceSize; the last is the remainder. A source
@@ -936,14 +970,14 @@ func (d *Downloader) fetchPiece(index int64) {
 			select {
 			case <-time.After(noUpstreamRetry):
 			case <-d.wakeCh:
-			case <-d.ctx.Done():
+			case <-ctx.Done():
 				return
 			}
 			continue
 		}
 		select {
 		case <-time.After(fetchRetryDelay):
-		case <-d.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -1086,7 +1120,7 @@ func (d *Downloader) releaseUpstreamLeases() {
 
 // fetchOnce fetches one piece from the source (primary root) or from the
 // upstream parents.
-func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
+func (d *Downloader) fetchOnce(ctx context.Context, index int64) ([]byte, error) {
 	// C4 (§5.2f): once the authoritative metadata is bound from an upstream
 	// (including a root that copied from a sibling — the failover case), the
 	// pieces come from the upstreams; only a root that self-builds (no bound
@@ -1098,16 +1132,16 @@ func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
 		if d.treeSource == nil {
 			return nil, errors.New("agent: pull-from-source but no source configured")
 		}
-		return d.source.FetchPiece(d.ctx, d.treeSource, d.treeID, d.filename, index, d.size, PieceSize)
+		return d.source.FetchPiece(ctx, d.treeSource, d.treeID, d.filename, index, d.size, PieceSize)
 	}
 	upstreams := d.topo.UpstreamAddrs()
 	if len(upstreams) == 0 {
 		return nil, errNoUpstream
 	}
-	d.ensureUpstreamLeases(d.ctx)
+	d.ensureUpstreamLeases(ctx)
 	var lastErr error
 	for _, addr := range upstreams {
-		data, err := d.fetchFromPeer(addr, index)
+		data, err := d.fetchFromPeer(ctx, addr, index)
 		if err == nil {
 			// C4 (§5.2e): verify the piece SHA-256 against the bound
 			// metadata BEFORE accepting it from this upstream; a mismatch is
@@ -1128,7 +1162,7 @@ func (d *Downloader) fetchOnce(index int64) ([]byte, error) {
 }
 
 // fetchFromPeer requests one piece from an upstream Data node.
-func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
+func (d *Downloader) fetchFromPeer(ctx context.Context, addr string, index int64) ([]byte, error) {
 	client, err := d.peers.client(addr)
 	if err != nil {
 		return nil, err
@@ -1136,7 +1170,7 @@ func (d *Downloader) fetchFromPeer(addr string, index int64) ([]byte, error) {
 	from := append(append([]*pppv1.Hop(nil), d.baseFrom...), &pppv1.Hop{NodeId: d.nodeID, JobId: d.jobID})
 	// Bound each upstream call so a hung peer cannot starve the file; the
 	// parent still gets pieceFetchTimeout to be downloading the piece itself.
-	callCtx, cancel := context.WithTimeout(d.ctx, pieceFetchTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, pieceFetchTimeout)
 	defer cancel()
 	resp, err := client.GetPiece(callCtx, &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename},
