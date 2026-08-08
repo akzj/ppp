@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -332,3 +334,30 @@ type mockSS struct {
 }
 
 func (m *mockSS) Context() context.Context { return m.ctx }
+
+// TestWarnIfRoleWithoutTLS verifies the misconfiguration warning: it fires
+// only when -tls-require-role is set and the server has no TLS credentials
+// (plaintext) — a deployment must not believe the gate is active when there
+// is no peer identity to check.
+func TestWarnIfRoleWithoutTLS(t *testing.T) {
+	var warned []string
+	capture := func(format string, args ...any) {
+		warned = append(warned, fmt.Sprintf(format, args...))
+	}
+	if !WarnIfRoleWithoutTLS(capture, "service,client", false) {
+		t.Fatal("expected a warning for a role flag without TLS creds")
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "role authorization is NOT enforced") {
+		t.Fatalf("warning text = %v", warned)
+	}
+	// No warning when TLS is enabled or the flag is empty.
+	if WarnIfRoleWithoutTLS(capture, "service,client", true) {
+		t.Fatal("unexpected warning with TLS enabled")
+	}
+	if WarnIfRoleWithoutTLS(capture, "", false) {
+		t.Fatal("unexpected warning with no role flag")
+	}
+	if len(warned) != 1 {
+		t.Fatalf("warned %d times, want 1", len(warned))
+	}
+}

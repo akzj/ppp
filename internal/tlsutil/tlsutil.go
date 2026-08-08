@@ -173,6 +173,18 @@ func RoleAuthServerOptions(requireRoles string) []grpc.ServerOption {
 	}
 }
 
+// WarnIfRoleWithoutTLS logs a WARNING when -tls-require-role is set but the
+// server has no TLS credentials: without a peer identity the role gate cannot
+// be enforced, so a misconfigured deployment must not silently believe it is
+// active. Returns true when the warning applied.
+func WarnIfRoleWithoutTLS(logf func(format string, args ...any), requireRoles string, credsEnabled bool) bool {
+	if requireRoles == "" || credsEnabled {
+		return false
+	}
+	logf("WARNING: -tls-require-role=%s is set but TLS is disabled (no -tls-ca/-tls-cert/-tls-key); role authorization is NOT enforced", requireRoles)
+	return true
+}
+
 func splitRoles(s string) []string {
 	var out []string
 	for _, r := range strings.Split(s, ",") {

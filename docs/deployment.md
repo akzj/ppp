@@ -244,11 +244,19 @@ whose role is not allowed.
 
 **Role convention** (one OU value per certificate):
 
-| Role | Carried by | Allowed to |
-|------|-----------|------------|
-| `ctl` | the control-plane operator/leader certificate | (reserved for the control plane) |
-| `service` | ppp agent/peer certificates | call the ctl (RegisterNode/Subscribe) and peer Data APIs |
-| `client` | orchestrator/leaf SDK certificates | call the ctl (CreateTree/CreateJob) and leaf Data APIs |
+| Role | Carried by |
+|------|-----------|
+| `ctl` | the control-plane operator/leader certificate |
+| `service` | ppp agent/peer certificates |
+| `client` | orchestrator/leaf SDK certificates |
+
+**Scope — a coarse per-connection gate.** The interceptor is a **per-connection** gate, not a
+per-RPC one: once a caller's role is in the allowed list it may call **any** RPC of that service.
+The intended separation (service for RegisterNode/Subscribe + peer Data, client for
+CreateTree/CreateJob + leaf Data) is not enforced method-by-method — e.g. with the gate on, a
+`service` certificate can also call `CreateTree`/`CreateJob`. **Per-RPC method-level authorization
+is left for a later phase.** Do not rely on the role to restrict which specific RPCs a caller may
+invoke.
 
 **Flag** (both binaries): `-tls-require-role <comma-separated roles>`
 
@@ -257,7 +265,9 @@ whose role is not allowed.
   **PermissionDenied** (gRPC code 7; the message includes the caller's role).
 - Unset (default): mTLS keeps working exactly as before — **no role check**. Certificates without
   an OU (older deployments) are fully compatible.
-- Plaintext (no TLS flags): nothing to check — calls pass through even if the flag is set.
+- Plaintext (no TLS flags): nothing to check — calls pass through even if the flag is set. The
+  server logs a **WARNING** at startup in that case ("role authorization is NOT enforced"), so a
+  misconfigured deployment cannot silently believe the gate is active.
 
 Example with the openssl commands above, adding the OU to each `-subj`:
 
