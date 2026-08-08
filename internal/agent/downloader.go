@@ -142,6 +142,10 @@ type Downloader struct {
 	// reclaimed, so upstream leases expire and the stop propagates.
 	need    int
 	jobNeed bool
+	// lastUse is the last time the downloader was touched (Ensure, need
+	// change); used by the manager to reclaim idle need=0 handshake
+	// downloaders.
+	lastUse time.Time
 
 	// Upstream leases keep the parents' downloaders alive while this node
 	// fetches from them (design §3.3). They are renewed while fetching and
@@ -220,6 +224,20 @@ func (d *Downloader) Need() int {
 	return d.need
 }
 
+// touchUse refreshes the last-use timestamp. Call with d.mu held.
+func (d *Downloader) touchUse() {
+	d.lastUse = time.Now()
+}
+
+// idleForReclaim reports whether the downloader is a need=0, non-downloading
+// handshake holder that can be reclaimed (P2-A): no need, not running, not
+// complete, no terminal error, and idle beyond the TTL.
+func (d *Downloader) idleForReclaim(ttl time.Duration, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.need == 0 && !d.running && !d.complete && d.fileErr == nil && now.Sub(d.lastUse) > ttl
+}
+
 // MetadataID returns a copy of the authoritative metadata identity currently
 // bound to this downloader. It is empty for a primary root that is still
 // constructing the first metadata.
@@ -255,6 +273,7 @@ func (d *Downloader) addNeed() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.need++
+	d.touchUse()
 	d.startLocked()
 }
 
@@ -278,6 +297,7 @@ func (d *Downloader) releaseNeed() {
 	if d.need > 0 {
 		d.need--
 	}
+	d.touchUse()
 	stop := d.need == 0 && !d.complete && d.fileErr == nil
 	d.mu.Unlock()
 	if stop {
@@ -972,6 +992,13 @@ func (d *Downloader) pieceStored(index int64) {
 // leaseRPCTimeout bounds each upstream lease RPC.
 const leaseRPCTimeout = 5 * time.Second
 
+// idleReclaimTTL reclaims a need=0, non-downloading downloader (a metadata
+// handshake left no need behind) after this idle period, so GetFileInfo
+// probes cannot accumulate resident downloaders (P2-A). The TTL is long
+// enough that a GetFileInfo -> GetMetadata/GetPiece sequence never reclaims
+// mid-flight.
+const idleReclaimTTL = 60 * time.Second
+
 // maxMetadataSize caps a copied metadata stream (a buggy/malicious upstream
 // must not be able to OOM the receiver before the hash check).
 const maxMetadataSize = 64 << 20
@@ -1230,6 +1257,7 @@ func (p *peerPool) close() {
 
 // DownloaderManager owns the per-(tree, file) downloaders.
 type DownloaderManager struct {
+	idleTTL     time.Duration // idle reclamation TTL for need=0 handshake downloaders
 	store       PieceStore
 	banned      *BannedList
 	topo        topologyProvider
@@ -1249,6 +1277,7 @@ type DownloaderManager struct {
 // session-lease duration downloaders request while fetching.
 func NewDownloaderManager(store PieceStore, banned *BannedList, topo topologyProvider, source Source, treeSource *pppv1.Source, nodeID string, concurrency int, leaseTTL time.Duration, peerCreds credentials.TransportCredentials) *DownloaderManager {
 	return &DownloaderManager{
+		idleTTL:     idleReclaimTTL,
 		store:       store,
 		banned:      banned,
 		topo:        topo,
@@ -1275,6 +1304,7 @@ func (m *DownloaderManager) Ensure(need FileNeed) *Downloader {
 	key := need.TreeID + "\x00" + need.Filename
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reclaimIdleLocked(time.Now())
 	d, ok := m.files[key]
 	if !ok {
 		src := m.treeSource
@@ -1284,8 +1314,22 @@ func (m *DownloaderManager) Ensure(need FileNeed) *Downloader {
 		d = newDownloader(need, m.store, m.banned, m.topo, m.source, src, m.peers, m.nodeID, m.concurrency, m, m.leaseTTL)
 		m.files[key] = d
 	}
+	d.mu.Lock()
+	d.touchUse()
+	d.mu.Unlock()
 	d.Ensure(need.Size)
 	return d
+}
+
+// reclaimIdleLocked removes need=0 handshake downloaders that have been idle
+// beyond the TTL, so metadata-only GetFileInfo probes cannot accumulate
+// resident downloaders (P2-A). Must hold m.mu.
+func (m *DownloaderManager) reclaimIdleLocked(now time.Time) {
+	for key, d := range m.files {
+		if d.idleForReclaim(m.idleTTL, now) {
+			delete(m.files, key)
+		}
+	}
 }
 
 // Build isolation (§4.1): the manager keeps exactly ONE downloader per

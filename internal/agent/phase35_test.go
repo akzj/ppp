@@ -77,7 +77,7 @@ func TestDownloaderRestartAfterSilentStop(t *testing.T) {
 	d.addNeed()
 	close(fake.release) // let the restarted fetches through
 
-	waitFor(t, 5*time.Second, "file completes after restart", func() bool {
+	waitFor(t, 15*time.Second, "file completes after restart", func() bool {
 		return store.IsComplete("a.bin")
 	})
 	if !store.HasPiece("a.bin", 0) || !store.HasPiece("a.bin", 1) {

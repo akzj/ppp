@@ -65,6 +65,8 @@ type fakeDataServer struct {
 	// bannedMeta serves GetMetadata with PermissionDenied while GetFileInfo
 	// still succeeds (the banned-consistency path, C5).
 	bannedMeta bool
+	// blockFileInfo blocks GetFileInfo until released or ctx done (P2-B).
+	blockFileInfo chan struct{}
 }
 
 // buildMetadata assembles the canonical metadata from the stored pieces and
@@ -120,7 +122,14 @@ func (f *fakeDataServer) buildMetadata(treeID, filename string) ([]byte, *pppv1.
 
 // GetFileInfo serves the fake's sealed artifact info (C4); it honors the
 // configured error code (e.g. BANNED) like GetPiece does.
-func (f *fakeDataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
+func (f *fakeDataServer) GetFileInfo(ctx context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
+	if f.blockFileInfo != nil {
+		select {
+		case <-f.blockFileInfo:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	code := f.errCode
 	f.mu.Unlock()
