@@ -178,8 +178,14 @@ func TestAgentMTLSDistribution(t *testing.T) {
 	defer dataConn.Close()
 	dataClient := pppv1.NewDataClient(dataConn)
 	waitFor(t, 30*time.Second, "member fetched the file from the root over mTLS", func() bool {
+		info, err := dataClient.GetFileInfo(context.Background(), &pppv1.GetFileInfoRequest{
+			Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
+		})
+		if err != nil || info.GetInfo() == nil {
+			return false
+		}
 		resp, err := dataClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
-			Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job", MetadataId: testMetaID(),
+			Key: &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"}, Index: 0, Size: int64(len(content)), JobId: "tls:job", MetadataId: info.GetInfo().GetMetadataId(),
 		})
 		if err != nil {
 			return false

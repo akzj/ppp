@@ -2,10 +2,12 @@ package agent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc64"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -415,7 +417,32 @@ func (s *sparsePieceStore) Seal(filename string, size int64, metadataBytes []byt
 		return err
 	}
 	if f.complete {
-		return nil // idempotent
+		// Idempotence applies only to the same immutable artifact. A direct
+		// store caller must not be able to hide a conflicting re-seal merely
+		// because this filename is already complete.
+		m, err := DecodeMetadata(metadataBytes)
+		if err != nil {
+			return fmt.Errorf("agent: invalid artifact metadata: %w", err)
+		}
+		if m.Filename != filename || m.FileSize != size || f.size != size {
+			return fmt.Errorf("%w: completed artifact parameters differ", errContentConflict)
+		}
+		_, metadataPath, _ := artifactPaths(s.dir, filename)
+		existing, err := os.ReadFile(metadataPath)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(MetadataID(existing), MetadataID(metadataBytes)) {
+			return fmt.Errorf("%w: completed artifact has a different metadata_id", errContentConflict)
+		}
+		return nil
+	}
+	// The store is the final commit boundary. Validate that the metadata really
+	// describes this key and every byte currently staged before publishing it;
+	// callers must not be able to seal a wrong filename/size, a corrupt resumed
+	// piece, or metadata whose file_digest disagrees with its piece digests.
+	if err := validateArtifact(f.file, filename, size, metadataBytes); err != nil {
+		return err
 	}
 	// 1. metadata sidecar + fsync.
 	_, metadataPath, commitPath := artifactPaths(s.dir, filename)
@@ -533,12 +560,28 @@ func (s *sparsePieceStore) recoverInterruptedSealLocked(filename, finalPath stri
 		s.clearStaleStagingLocked(filename, finalPath)
 		return nil
 	}
-	if finalStat.Size() != m.FileSize {
-		// Data does not match the metadata: stale/corrupt staging.
+	if m.Filename != filename || finalStat.Size() != m.FileSize {
+		// The sidecar belongs to another key or the data size does not match:
+		// stale/corrupt staging.
 		s.clearStaleStagingLocked(filename, finalPath)
 		return nil
 	}
-	// Data matches the metadata: complete the seal by writing the commit.
+	final, err := os.Open(finalPath)
+	if err != nil {
+		return err
+	}
+	validateErr := validateArtifact(final, filename, finalStat.Size(), meta)
+	closeErr := final.Close()
+	if validateErr != nil {
+		s.clearStaleStagingLocked(filename, finalPath)
+		return nil
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	// Data and every digest match the metadata: complete the seal by writing
+	// the commit. Size alone is insufficient because a same-length corrupt file
+	// must never be promoted during crash recovery.
 	commitData, err := EncodeCommit(MetadataID(meta))
 	if err != nil {
 		return err
@@ -547,6 +590,50 @@ func (s *sparsePieceStore) recoverInterruptedSealLocked(filename, finalPath stri
 		return err
 	}
 	return fsyncDir(s.dir)
+}
+
+// validateArtifact verifies canonical metadata against a staged/final data
+// file. It is deliberately used both by Seal and interrupted-Seal recovery so
+// the commit marker can only be created for bytes that match every expected
+// piece digest and the whole-file digest.
+func validateArtifact(file io.ReaderAt, filename string, size int64, metadataBytes []byte) error {
+	m, err := DecodeMetadata(metadataBytes)
+	if err != nil {
+		return fmt.Errorf("agent: invalid artifact metadata: %w", err)
+	}
+	if m.Filename != filename {
+		return fmt.Errorf("agent: metadata filename %q != artifact %q", m.Filename, filename)
+	}
+	if m.FileSize != size {
+		return fmt.Errorf("agent: metadata size %d != artifact size %d", m.FileSize, size)
+	}
+	if m.PieceSize != PieceSize {
+		return fmt.Errorf("agent: metadata piece_size %d != node piece_size %d", m.PieceSize, PieceSize)
+	}
+	fileHash := sha256.New()
+	for index := 0; index < m.PieceCount; index++ {
+		offset := int64(index) * m.PieceSize
+		pieceLen := m.PieceSize
+		if remaining := size - offset; remaining < pieceLen {
+			pieceLen = remaining
+		}
+		if pieceLen <= 0 {
+			return fmt.Errorf("agent: invalid piece %d length %d", index, pieceLen)
+		}
+		data := make([]byte, pieceLen)
+		if _, err := file.ReadAt(data, offset); err != nil {
+			return fmt.Errorf("agent: read artifact piece %d: %w", index, err)
+		}
+		got := sha256.Sum256(data)
+		if !bytes.Equal(got[:], m.PieceDigests[index]) {
+			return fmt.Errorf("%w: piece %d", errPieceDigestMismatch, index)
+		}
+		_, _ = fileHash.Write(data)
+	}
+	if !bytes.Equal(fileHash.Sum(nil), m.FileDigest) {
+		return errors.New("agent: file digest mismatch")
+	}
+	return nil
 }
 
 // clearStaleStagingLocked removes the stale index, metadata and final of an

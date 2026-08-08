@@ -55,12 +55,12 @@ func TestPieceStoreCompleteMarker(t *testing.T) {
 	if err := st.Put("a.bin", 0, []byte("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	sealTestFile(t, st, "a.bin", 100)
+	sealTestFile(t, st, "a.bin", 1)
 	if !st.IsComplete("a.bin") {
 		t.Fatal("IsComplete after Seal = false")
 	}
-	if st.Size("a.bin") != 100 {
-		t.Fatalf("Size = %d, want 100", st.Size("a.bin"))
+	if st.Size("a.bin") != 1 {
+		t.Fatalf("Size = %d, want 1", st.Size("a.bin"))
 	}
 	if err := st.Delete("a.bin"); err != nil {
 		t.Fatalf("Delete: %v", err)

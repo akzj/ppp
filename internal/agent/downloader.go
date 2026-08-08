@@ -108,6 +108,7 @@ type Downloader struct {
 	mgr         *DownloaderManager
 
 	mu              sync.Mutex
+	metaBindMu      sync.Mutex // serializes the one authoritative metadata bind
 	ctx             context.Context
 	cancel          context.CancelFunc
 	size            int64
@@ -217,6 +218,25 @@ func (d *Downloader) Need() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.need
+}
+
+// MetadataID returns a copy of the authoritative metadata identity currently
+// bound to this downloader. It is empty for a primary root that is still
+// constructing the first metadata.
+func (d *Downloader) MetadataID() []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]byte(nil), d.metaID...)
+}
+
+// MetadataBytes returns a copy of the verified, upstream-copied metadata bound
+// to this downloader. It is safe to relay before the local data is complete:
+// the bytes have already passed the metadata_id and canonical-format checks
+// and are immutable after binding.
+func (d *Downloader) MetadataBytes() ([]byte, []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]byte(nil), d.metaBytes...), append([]byte(nil), d.metaID...)
 }
 
 // Ensure records the file size. Fetching starts only once a need exists
@@ -525,6 +545,8 @@ func (d *Downloader) nextMissingLocked() int64 {
 // primary root (PullFromSource with no upstreams) self-builds at Seal time
 // (C2/C3) and returns nil without binding.
 func (d *Downloader) bindMetadata() error {
+	d.metaBindMu.Lock()
+	defer d.metaBindMu.Unlock()
 	d.mu.Lock()
 	if d.meta != nil {
 		d.mu.Unlock()
@@ -543,21 +565,33 @@ func (d *Downloader) bindMetadata() error {
 		return errNoUpstream
 	}
 	var lastErr error = errNoUpstream
+	var selectedMeta *FileMetadataV1
+	var selectedBytes []byte
+	var selectedSize int64
 	for _, addr := range upstreams {
 		meta, metaBytes, size, err := d.fetchMetadataFrom(addr)
 		if err != nil {
-			if errors.Is(err, errFileBanned) {
+			if errors.Is(err, errFileBanned) || errors.Is(err, errContentConflict) {
 				return err
 			}
 			lastErr = err
 			continue // try the next upstream
 		}
+		if selectedMeta == nil {
+			selectedMeta, selectedBytes, selectedSize = meta, metaBytes, size
+			continue
+		}
+		if !bytes.Equal(MetadataID(selectedBytes), MetadataID(metaBytes)) {
+			return fmt.Errorf("%w: upstreams returned different metadata_id values", errContentConflict)
+		}
+	}
+	if selectedMeta != nil {
 		d.mu.Lock()
-		d.meta = meta
-		d.metaBytes = metaBytes
-		d.metaID = MetadataID(metaBytes)
-		d.size = size
-		d.numPieces = (size + PieceSize - 1) / PieceSize
+		d.meta = selectedMeta
+		d.metaBytes = selectedBytes
+		d.metaID = MetadataID(selectedBytes)
+		d.size = selectedSize
+		d.numPieces = (selectedSize + PieceSize - 1) / PieceSize
 		d.pieceHashes = make([][]byte, d.numPieces)
 		boundID := append([]byte(nil), d.metaID...)
 		d.mu.Unlock()
@@ -573,6 +607,31 @@ func (d *Downloader) bindMetadata() error {
 		return nil
 	}
 	return lastErr
+}
+
+// FileInfo binds metadata without starting piece downloads and returns the
+// resulting artifact description. This closes the first-download handshake:
+// a caller asks its chosen node for FileInfo, that node resolves immutable
+// metadata from its upstream, and only then does the caller issue GetPiece
+// with the returned metadata_id.
+func (d *Downloader) FileInfo() (*pppv1.FileInfo, error) {
+	if err := d.bindMetadata(); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.meta == nil || len(d.metaBytes) == 0 || len(d.metaID) != MetadataDigestSize {
+		return nil, errNoUpstream
+	}
+	return &pppv1.FileInfo{
+		Key:             &pppv1.TreeKey{TreeId: d.treeID, Filename: d.filename},
+		FileSize:        d.meta.FileSize,
+		PieceSize:       d.meta.PieceSize,
+		PieceCount:      int64(d.meta.PieceCount),
+		MetadataId:      append([]byte(nil), d.metaID...),
+		MetadataSize:    int64(len(d.metaBytes)),
+		DigestAlgorithm: d.meta.DigestAlgo,
+	}, nil
 }
 
 // fetchMetadataFrom copies the sealed metadata from one upstream and verifies
@@ -613,9 +672,9 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 	// receiver before the hash check; over-limit is METADATA_CORRUPT.
 	limit := info.GetMetadataSize()
 	if limit <= 0 || limit > maxMetadataSize {
-		limit = maxMetadataSize
+		return nil, nil, 0, fmt.Errorf("%w: invalid advertised metadata size %d", errMetadataCorrupt, limit)
 	}
-	var buf []byte
+	buf := make([]byte, 0, limit)
 	for {
 		chunk, err := stream.Recv()
 		if err == io.EOF {
@@ -630,10 +689,22 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 			}
 			return nil, nil, 0, err
 		}
+		if !bytes.Equal(chunk.GetMetadataId(), info.GetMetadataId()) {
+			return nil, nil, 0, fmt.Errorf("%w: metadata chunk identity mismatch", errMetadataCorrupt)
+		}
+		if chunk.GetOffset() != int64(len(buf)) {
+			return nil, nil, 0, fmt.Errorf("%w: metadata chunk offset %d != expected %d", errMetadataCorrupt, chunk.GetOffset(), len(buf))
+		}
+		if len(chunk.GetData()) == 0 {
+			return nil, nil, 0, fmt.Errorf("%w: empty metadata chunk", errMetadataCorrupt)
+		}
 		if int64(len(buf))+int64(len(chunk.GetData())) > limit {
 			return nil, nil, 0, fmt.Errorf("%w: metadata stream exceeds the advertised size %d", errMetadataCorrupt, limit)
 		}
 		buf = append(buf, chunk.GetData()...)
+	}
+	if int64(len(buf)) != info.GetMetadataSize() {
+		return nil, nil, 0, fmt.Errorf("%w: metadata stream length %d != advertised %d", errMetadataCorrupt, len(buf), info.GetMetadataSize())
 	}
 	if !bytes.Equal(MetadataID(buf), info.GetMetadataId()) {
 		return nil, nil, 0, fmt.Errorf("%w: metadata_id mismatch after copy", errMetadataCorrupt)
@@ -649,6 +720,9 @@ func (d *Downloader) fetchMetadataFrom(addr string) (*FileMetadataV1, []byte, in
 	}
 	if meta.FileSize != info.GetFileSize() {
 		return nil, nil, 0, fmt.Errorf("%w: file size %d != info %d", errMetadataCorrupt, meta.FileSize, info.GetFileSize())
+	}
+	if meta.PieceSize != info.GetPieceSize() || int64(meta.PieceCount) != info.GetPieceCount() || meta.DigestAlgo != info.GetDigestAlgorithm() {
+		return nil, nil, 0, fmt.Errorf("%w: metadata parameters do not match FileInfo", errMetadataCorrupt)
 	}
 	return meta, buf, info.GetFileSize(), nil
 }
@@ -1247,7 +1321,7 @@ func (m *DownloaderManager) BoundMetadataID(treeID, filename string) []byte {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.metaID
+	return append([]byte(nil), d.metaID...)
 }
 
 // Get returns the active downloader for a file, or nil.

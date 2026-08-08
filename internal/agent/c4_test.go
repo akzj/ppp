@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -140,6 +141,76 @@ func TestDataServerGetMetadataMatch(t *testing.T) {
 	// Absent -> NOT_FOUND.
 	if _, err := collectWithKey(t, ds, &pppv1.TreeKey{TreeId: "t1", Filename: "nope.bin"}, MetadataID(meta)); err == nil {
 		t.Fatal("GetMetadata(absent) = nil error, want NOT_FOUND")
+	}
+}
+
+// TestDataServerRelaysBoundMetadata verifies a middle node can relay the
+// exact immutable metadata immediately after its metadata-only handshake,
+// without waiting for its local data download to complete.
+func TestDataServerRelaysBoundMetadata(t *testing.T) {
+	content := c3Content()
+	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}}
+	addr, stop := startFakeData(t, fake)
+	defer stop()
+
+	store, err := NewFilePieceStore(t.TempDir() + "/pieces")
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{}, nil, "middle", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	ds := NewDataServer("middle", "t1", t.TempDir()+"/download", store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
+	key := &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}
+
+	infoResp, err := ds.GetFileInfo(context.Background(), &pppv1.GetFileInfoRequest{Key: key})
+	if err != nil || infoResp.GetInfo() == nil {
+		t.Fatalf("GetFileInfo = %v, %v", infoResp.GetError(), err)
+	}
+	if store.PieceCount("a.bin") != 0 {
+		t.Fatal("metadata-only handshake downloaded file pieces")
+	}
+	got, err := collectWithKey(t, ds, key, infoResp.GetInfo().GetMetadataId())
+	if err != nil {
+		t.Fatalf("GetMetadata(bound): %v", err)
+	}
+	wantMeta, _, err := fake.buildMetadata("t1", "a.bin")
+	if err != nil {
+		t.Fatalf("buildMetadata: %v", err)
+	}
+	if !bytes.Equal(got, wantMeta) {
+		t.Fatal("middle node did not relay the exact upstream metadata")
+	}
+}
+
+func TestDownloaderMetadataBindRejectsConflictingUpstreams(t *testing.T) {
+	contentA := c3Content()
+	contentB := append([]byte(nil), contentA...)
+	contentB[0] ^= 0xff
+	serverFor := func(content []byte) *fakeDataServer {
+		return &fakeDataServer{pieces: map[string][]byte{
+			"t1\x00a.bin\x000": content[:int(PieceSize)],
+			"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+			"t1\x00a.bin\x002": content[2*int(PieceSize):],
+		}}
+	}
+	addrA, stopA := startFakeData(t, serverFor(contentA))
+	defer stopA()
+	addrB, stopB := startFakeData(t, serverFor(contentB))
+	defer stopB()
+
+	dm, _ := newTestManager(t, &fakeTopology{addrs: []string{addrA, addrB}}, nil)
+	d := dm.Ensure(FileNeed{TreeID: "t1", Filename: "a.bin"})
+	if _, err := d.FileInfo(); !errors.Is(err, errContentConflict) {
+		t.Fatalf("FileInfo error = %v, want errContentConflict", err)
+	}
+	if len(d.MetadataID()) != 0 {
+		t.Fatal("downloader bound one of several conflicting metadata identities")
 	}
 }
 

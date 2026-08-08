@@ -148,6 +148,9 @@ func TestSparsePieceStoreHoles(t *testing.T) {
 	}
 
 	// Fill the hole and verify the complete file content matches the pieces.
+	if err := st.Put("a.bin", 0, append(append([]byte{}, p0...), make([]byte, int(PieceSize)-len(p0))...)); err != nil {
+		t.Fatalf("fill Put(0): %v", err)
+	}
 	if err := st.Put("a.bin", 1, make([]byte, PieceSize)); err != nil {
 		t.Fatalf("Put(1): %v", err)
 	}
@@ -345,6 +348,71 @@ func sealTestFile(t *testing.T, st PieceStore, filename string, size int64) {
 	}
 	if err := st.Seal(filename, size, metaBytes); err != nil {
 		t.Fatalf("sealTestFile Seal: %v", err)
+	}
+}
+
+func TestSparseStoreSealValidatesMetadataAndData(t *testing.T) {
+	content := []byte("artifact bytes")
+	newStore := func(t *testing.T) PieceStore {
+		t.Helper()
+		st, err := NewPieceStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewPieceStore: %v", err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		if err := st.Put("a.bin", 0, content); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		return st
+	}
+	metadata := func(t *testing.T, filename string, fileDigest, pieceDigest []byte) []byte {
+		t.Helper()
+		m, err := BuildMetadata(filename, int64(len(content)), PieceSize, [][]byte{pieceDigest}, fileDigest)
+		if err != nil {
+			t.Fatalf("BuildMetadata: %v", err)
+		}
+		b, err := m.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return b
+	}
+	good := sha256.Sum256(content)
+	bad := sha256.Sum256([]byte("different"))
+
+	if err := newStore(t).Seal("a.bin", int64(len(content)), metadata(t, "other.bin", good[:], good[:])); err == nil {
+		t.Fatal("Seal accepted metadata for another filename")
+	}
+	if err := newStore(t).Seal("a.bin", int64(len(content)), metadata(t, "a.bin", good[:], bad[:])); !errors.Is(err, errPieceDigestMismatch) {
+		t.Fatalf("Seal piece mismatch error = %v, want errPieceDigestMismatch", err)
+	}
+	if err := newStore(t).Seal("a.bin", int64(len(content)), metadata(t, "a.bin", bad[:], good[:])); err == nil {
+		t.Fatal("Seal accepted an incorrect whole-file digest")
+	}
+}
+
+func TestSparseStoreSealIdempotenceRejectsDifferentMetadata(t *testing.T) {
+	content := []byte("artifact bytes")
+	st := newSparseTestStore(t, "")
+	if err := st.Put("a.bin", 0, content); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	sealTestFile(t, st, "a.bin", int64(len(content)))
+	if err := st.Seal("a.bin", int64(len(content)), []byte("not metadata")); err == nil {
+		t.Fatal("idempotent Seal accepted invalid metadata")
+	}
+
+	digest := sha256.Sum256(content)
+	other, err := BuildMetadata("a.bin", int64(len(content)), PieceSize, [][]byte{digest[:]}, bytes.Repeat([]byte{0xff}, MetadataDigestSize))
+	if err != nil {
+		t.Fatalf("BuildMetadata: %v", err)
+	}
+	otherBytes, err := other.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := st.Seal("a.bin", int64(len(content)), otherBytes); !errors.Is(err, errContentConflict) {
+		t.Fatalf("Seal conflict error = %v, want errContentConflict", err)
 	}
 }
 

@@ -145,10 +145,12 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 
 	// --- member GetPiece pulls from the root ---
 	memberClient := pppv1.NewDataClient(mustDial(t, member.Addr()))
+	rootClient := pppv1.NewDataClient(mustDial(t, root.Addr()))
+	rootMetadataID := mustGetMetadataID(t, rootClient, "t1", "file.bin")
 	piece, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)), JobId: "local:test",
-		MetadataId: testMetaID(), // the member has no artifact yet: the back-to-source binds the real id
+		MetadataId: rootMetadataID,
 	})
 	if err != nil {
 		t.Fatalf("member GetPiece: %v", err)
@@ -217,7 +219,7 @@ func TestIntegrationCtlTwoAgents(t *testing.T) {
 	after, err := memberClient.GetPiece(context.Background(), &pppv1.GetPieceRequest{
 		Key:   &pppv1.TreeKey{TreeId: "t1", Filename: "file.bin"},
 		Index: 0, Size: int64(len(content)),
-		MetadataId: testMetaID(), // the member rebuilds from the root (no artifact yet)
+		MetadataId: mustGetMetadataID(t, rootClient, "t1", "file.bin"),
 	})
 	if err != nil {
 		t.Fatalf("GetPiece after unban: %v", err)

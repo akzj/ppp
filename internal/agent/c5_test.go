@@ -176,3 +176,42 @@ func TestDownloaderGetMetadataBannedConsistency(t *testing.T) {
 		t.Fatalf("WaitPiece err = %v, want errFileBanned (GetMetadata PermissionDenied must map)", err)
 	}
 }
+
+// TestDataServerCacheMissRejectsTriggerMetadataMismatch verifies that the
+// request which starts a non-root download is checked against the metadata_id
+// learned from the upstream before any bytes are returned to that caller.
+func TestDataServerCacheMissRejectsTriggerMetadataMismatch(t *testing.T) {
+	content := c3Content()
+	fake := &fakeDataServer{pieces: map[string][]byte{
+		"t1\x00a.bin\x000": content[:int(PieceSize)],
+		"t1\x00a.bin\x001": content[int(PieceSize) : 2*int(PieceSize)],
+		"t1\x00a.bin\x002": content[2*int(PieceSize):],
+	}}
+	addr, stop := startFakeData(t, fake)
+	defer stop()
+
+	store, err := NewFilePieceStore(newTestStoreDir(t))
+	if err != nil {
+		t.Fatalf("NewFilePieceStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dm := NewDownloaderManager(store, NewBannedList(), &fakeTopology{addrs: []string{addr}},
+		&fakeSource{}, nil, "member", 2, 30*time.Second, nil)
+	t.Cleanup(dm.Close)
+	ds := NewDataServer("member", "t1", t.TempDir(), store, NewBannedList(), dm, NewLeaseManager(30*time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := ds.GetPiece(ctx, &pppv1.GetPieceRequest{
+		Key:        &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"},
+		Index:      0,
+		Size:       int64(len(content)),
+		MetadataId: bytes.Repeat([]byte{0xff}, MetadataDigestSize),
+	})
+	if err != nil {
+		t.Fatalf("GetPiece: %v", err)
+	}
+	if resp.GetError().GetCode() != pppv1.Error_CONTENT_CONFLICT {
+		t.Fatalf("GetPiece error = %v, want CONTENT_CONFLICT", resp.GetError())
+	}
+}

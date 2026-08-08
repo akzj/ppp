@@ -93,6 +93,15 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	if s.banned.IsBanned(key.GetTreeId(), key.GetFilename()) {
 		return errResp(pppv1.Error_BANNED, "file is banned"), nil
 	}
+	// A primary root never exposes BUILDING bytes. Check this before the local
+	// store lookup because already-fetched pieces are present in the sparse
+	// store while the root is still constructing the first metadata.
+	if s.root && !s.store.IsComplete(key.GetFilename()) {
+		if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
+			return errResp(pppv1.Error_NOT_READY, "artifact is building"), nil
+		}
+		return errResp(pppv1.Error_NOT_READY, "artifact is not ready"), nil
+	}
 	// Local hit: a present piece is served only when the request's
 	// metadata_id matches the artifact's identity — a sealed sidecar's id, or
 	// an in-progress downloader's bound id (the root-below pipeline, decision
@@ -100,7 +109,7 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	// downloading). A mismatch is CONTENT_CONFLICT (§5.1): never serve one
 	// artifact under another artifact's identity.
 	if data, err := s.store.Get(key.GetFilename(), req.GetIndex()); err == nil {
-		if id := s.artifactMetadataID(key.GetTreeId(), key.GetFilename()); len(id) > 0 && !bytes.Equal(req.GetMetadataId(), id) {
+		if id := s.artifactMetadataID(key.GetTreeId(), key.GetFilename()); len(id) == 0 || !bytes.Equal(req.GetMetadataId(), id) {
 			return errResp(pppv1.Error_CONTENT_CONFLICT, "content conflict: metadata_id mismatch"), nil
 		}
 		return s.pieceResponse(key, req.GetIndex(), data), nil
@@ -116,9 +125,6 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 	// a build (the C3 gate previously leaked the no-artifact case through to
 	// the back-to-source path, starting a build and serving mid-build pieces).
 	if s.root {
-		if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
-			return errResp(pppv1.Error_NOT_READY, "artifact is building"), nil
-		}
 		return errResp(pppv1.Error_NOT_READY, "artifact is not ready"), nil
 	}
 	// Subtask back-to-source: ensure the downloader exists and wait for the
@@ -139,6 +145,13 @@ func (s *DataServer) GetPiece(ctx context.Context, req *pppv1.GetPieceRequest) (
 			return nil, err
 		}
 		return errResp(pppv1.Error_INTERNAL, err.Error()), nil
+	}
+	// The downloader learns the authoritative identity from its upstream. The
+	// request that triggered a cache miss must match that identity too; checking
+	// only subsequent peer-to-peer calls would let an arbitrary metadata_id
+	// receive bytes from a different artifact.
+	if id := d.MetadataID(); len(id) == 0 || !bytes.Equal(req.GetMetadataId(), id) {
+		return errResp(pppv1.Error_CONTENT_CONFLICT, "content conflict: metadata_id mismatch"), nil
 	}
 	return s.pieceResponse(key, req.GetIndex(), data), nil
 }
@@ -188,15 +201,21 @@ func (s *DataServer) sealedFileInfo(key *pppv1.TreeKey) (*pppv1.FileInfo, bool) 
 // served: the sealed metadata sidecar's id, or the in-progress downloader's
 // bound metadata id (empty when neither exists).
 func (s *DataServer) artifactMetadataID(treeID, filename string) []byte {
-	if meta, ok, _ := s.store.ReadMetadata(filename); ok {
+	if s.store.IsComplete(filename) {
+		meta, ok, _ := s.store.ReadMetadata(filename)
+		if !ok {
+			return nil
+		}
 		return MetadataID(meta)
 	}
 	return s.dm.BoundMetadataID(treeID, filename)
 }
 
 // GetFileInfo returns the sealed artifact's info (§5.1): banned -> BANNED;
-// sealed -> FileInfo; building -> NOT_READY; no artifact -> NOT_FOUND (no
-// build is triggered — a root builds only via Job, a non-root via GetPiece).
+// sealed -> FileInfo; building -> NOT_READY. For a non-root with no local
+// artifact, this performs the metadata-only upstream handshake and returns the
+// bound FileInfo without starting any piece download. A root still builds only
+// via Job and returns NOT_FOUND when no artifact exists.
 func (s *DataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoRequest) (*pppv1.GetFileInfoResponse, error) {
 	key := req.GetKey()
 	if key == nil || key.GetTreeId() == "" || key.GetFilename() == "" {
@@ -217,6 +236,28 @@ func (s *DataServer) GetFileInfo(_ context.Context, req *pppv1.GetFileInfoReques
 		return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
 			Error: &pppv1.Error{Code: pppv1.Error_NOT_READY, Message: "artifact is building"},
 		}}, nil
+	}
+	if !s.root {
+		d := s.dm.Ensure(FileNeed{TreeID: key.GetTreeId(), Filename: key.GetFilename()})
+		info, err := d.FileInfo()
+		if err == nil {
+			return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Info{Info: info}}, nil
+		}
+		if errors.Is(err, errFileBanned) {
+			return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+				Error: &pppv1.Error{Code: pppv1.Error_BANNED, Message: "file is banned"},
+			}}, nil
+		}
+		if errors.Is(err, errContentConflict) {
+			return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+				Error: &pppv1.Error{Code: pppv1.Error_CONTENT_CONFLICT, Message: err.Error()},
+			}}, nil
+		}
+		if errors.Is(err, errMetadataCorrupt) {
+			return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
+				Error: &pppv1.Error{Code: pppv1.Error_METADATA_CORRUPT, Message: err.Error()},
+			}}, nil
+		}
 	}
 	return &pppv1.GetFileInfoResponse{Result: &pppv1.GetFileInfoResponse_Error{
 		Error: &pppv1.Error{Code: pppv1.Error_NOT_FOUND, Message: "artifact not found"},
@@ -240,6 +281,20 @@ func (s *DataServer) GetMetadata(req *pppv1.GetMetadataRequest, stream pppv1.Dat
 	}
 	meta, ok, err := s.store.ReadMetadata(key.GetFilename())
 	if err != nil || !ok || !s.store.IsComplete(key.GetFilename()) {
+		// A non-root may have completed the metadata-only handshake without
+		// downloading the data yet. Relay those exact verified bytes so a
+		// deeper node can perform the same handshake. Primary roots remain
+		// strictly SEALED-only and never expose self-built BUILDING metadata.
+		if !s.root {
+			if d := s.dm.Get(key.GetTreeId(), key.GetFilename()); d != nil {
+				boundMeta, boundID := d.MetadataBytes()
+				if len(boundMeta) > 0 && len(boundID) == MetadataDigestSize {
+					meta, ok, err = boundMeta, true, nil
+				}
+			}
+		}
+	}
+	if err != nil || !ok {
 		if s.dm.IsBuilding(key.GetTreeId(), key.GetFilename()) {
 			return status.Error(codes.FailedPrecondition, "artifact is building")
 		}

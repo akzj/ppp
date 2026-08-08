@@ -137,8 +137,15 @@ func TestE2EMTLS(t *testing.T) {
 	dataClient := pppv1.NewDataClient(dataConn)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
+		info, err := dataClient.GetFileInfo(ctx, &pppv1.GetFileInfoRequest{
+			Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename},
+		})
+		if err != nil || info.GetInfo() == nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
 		resp, err := dataClient.GetPiece(ctx, &pppv1.GetPieceRequest{
-			Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls", MetadataId: e2eFixedMetaID,
+			Key: &pppv1.TreeKey{TreeId: treeID, Filename: filename}, Index: 0, Size: int64(len(content)), JobId: "e2e:tls", MetadataId: info.GetInfo().GetMetadataId(),
 		})
 		if err == nil && resp.GetError().GetCode() == pppv1.Error_ERROR_CODE_UNSPECIFIED {
 			break

@@ -246,11 +246,11 @@ func TestDataServerBuildingGate(t *testing.T) {
 	d.addNeed()
 	defer d.releaseNeed()
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && !dm.IsBuilding("t1", "a.bin") {
+	for time.Now().Before(deadline) && (!dm.IsBuilding("t1", "a.bin") || !store.HasPiece("a.bin", 0)) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !dm.IsBuilding("t1", "a.bin") {
-		t.Fatal("build did not enter the BUILDING state")
+	if !dm.IsBuilding("t1", "a.bin") || !store.HasPiece("a.bin", 0) {
+		t.Fatal("build did not reach BUILDING with a locally present piece")
 	}
 
 	req := &pppv1.GetPieceRequest{Key: &pppv1.TreeKey{TreeId: "t1", Filename: "a.bin"}, Index: 0, Size: int64(len(content)), JobId: "job:x", MetadataId: testMetaID()}
