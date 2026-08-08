@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -154,6 +155,33 @@ func RoleAuthStreamInterceptor(allowed ...string) grpc.StreamServerInterceptor {
 		}
 		return handler(srv, ss)
 	}
+}
+
+// RoleAuthServerOptions returns gRPC server options that enforce the
+// comma-separated allowed roles (e.g. "service,client"). An empty requireRoles
+// yields no options — mTLS keeps working as before with no role check
+// (compatibility with certificates that carry no OU). Plaintext calls pass
+// through either way (the interceptors skip when there is no TLS peer info).
+func RoleAuthServerOptions(requireRoles string) []grpc.ServerOption {
+	roles := splitRoles(requireRoles)
+	if len(roles) == 0 {
+		return nil
+	}
+	return []grpc.ServerOption{
+		grpc.UnaryInterceptor(RoleAuthUnaryInterceptor(roles...)),
+		grpc.StreamInterceptor(RoleAuthStreamInterceptor(roles...)),
+	}
+}
+
+func splitRoles(s string) []string {
+	var out []string
+	for _, r := range strings.Split(s, ",") {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func roleAllowed(role string, allowed []string) bool {

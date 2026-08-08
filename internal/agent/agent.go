@@ -126,6 +126,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	if a.serverCreds != nil {
 		serverOpts = append(serverOpts, grpc.Creds(a.serverCreds))
 	}
+	// Identity authorization (Phase 10): when -tls-require-role is set, only
+	// callers whose certificate OU role is allowed may call the Data API.
+	serverOpts = append(serverOpts, tlsutil.RoleAuthServerOptions(a.cfg.TLSRequireRole)...)
 	a.grpc = grpc.NewServer(serverOpts...)
 	pppv1.RegisterDataServer(a.grpc, newRootDataServer(a.nodeID, a.cfg.Tree, a.cfg.DownloadPath, a.store, a.banned, a.dm, a.leases, a.cfg.Role == pppv1.Node_ROOT))
 	go func() { _ = a.grpc.Serve(lis) }()

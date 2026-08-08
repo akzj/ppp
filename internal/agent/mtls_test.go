@@ -32,7 +32,7 @@ func writeFilePEM(t *testing.T, name string, data []byte) string {
 
 func mustTLSFiles(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage) (certFile, keyFile string) {
 	t.Helper()
-	certPEM, keyPEM, err := tlsutil.GenerateTestCert(ca, caKey, cn, dns, ips, usages)
+	certPEM, keyPEM, err := tlsutil.GenerateTestCert(ca, caKey, cn, "", dns, ips, usages)
 	if err != nil {
 		t.Fatalf("GenerateTestCert(%s): %v", cn, err)
 	}

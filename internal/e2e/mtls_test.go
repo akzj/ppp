@@ -32,7 +32,7 @@ func writeMTLSPEM(t *testing.T, dir, name string, data []byte) string {
 
 func genMTLSCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage) (certPEM, keyPEM []byte) {
 	t.Helper()
-	certPEM, keyPEM, err := tlsutil.GenerateTestCert(ca, caKey, cn, dns, ips, usages)
+	certPEM, keyPEM, err := tlsutil.GenerateTestCert(ca, caKey, cn, "", dns, ips, usages)
 	if err != nil {
 		t.Fatalf("GenerateTestCert(%s): %v", cn, err)
 	}

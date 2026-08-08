@@ -26,9 +26,10 @@ type Config struct {
 	// LeaderRenew is how often the leader renews its lease.
 	LeaderRenew time.Duration
 	// TLS options for mTLS (all empty = plaintext, development compatibility).
-	TLSCA   string
-	TLSCert string
-	TLSKey  string
+	TLSCA          string
+	TLSRequireRole string // comma-separated allowed client cert roles (empty = no role check)
+	TLSCert        string
+	TLSKey         string
 	// TLSClientCert/TLSClientKey/TLSClientCA are the client-side identity the
 	// ctl uses when it dials peers (unused for now; the ctl only serves).
 	TLSClientCA   string
@@ -67,6 +68,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.LeaderLease, "leader-lease", c.LeaderLease, "leader lease duration")
 	fs.DurationVar(&c.LeaderRenew, "leader-renew", c.LeaderRenew, "leader lease renewal interval")
 	fs.StringVar(&c.TLSCA, "tls-ca", c.TLSCA, "CA cert file for mTLS (empty = plaintext)")
+	fs.StringVar(&c.TLSRequireRole, "tls-require-role", c.TLSRequireRole, "comma-separated allowed client cert roles (e.g. service,client); empty = no role check")
 	fs.StringVar(&c.TLSCert, "tls-cert", c.TLSCert, "server cert file for mTLS")
 	fs.StringVar(&c.TLSKey, "tls-key", c.TLSKey, "server key file for mTLS")
 	fs.DurationVar(&c.HeartbeatTimeout, "heartbeat-timeout", c.HeartbeatTimeout, "node heartbeat timeout before pruning")

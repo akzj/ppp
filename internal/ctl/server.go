@@ -157,6 +157,9 @@ func ServeControl(ctx context.Context, cfg *Config, lis net.Listener) (gs *grpc.
 	if creds != nil {
 		serverOpts = append(serverOpts, grpc.Creds(creds))
 	}
+	// Identity authorization (Phase 10): when -tls-require-role is set, only
+	// callers whose certificate OU role is allowed may call the Control API.
+	serverOpts = append(serverOpts, tlsutil.RoleAuthServerOptions(cfg.TLSRequireRole)...)
 	gs = grpc.NewServer(serverOpts...)
 	pppv1.RegisterControlServer(gs, srv)
 	doneCh := make(chan struct{})
